@@ -93,7 +93,7 @@ class FeedbackUiTests(unittest.TestCase):
                 self.assertIn("7,400", page.locator(".usage-chart figcaption").inner_text())
                 self.shot(page, "settings-top")
                 page.locator("#window-mode").scroll_into_view_if_needed()
-                self.assertEqual(page.input_value("#window-mode"), "normal")
+                self.assertEqual(page.input_value("#window-mode"), "fullscreen")  # 1.19.1 기본값
                 page.select_option("#window-mode", "maximized")
                 self.shot(page, "settings-window-mode")
                 page.click(".modal-foot button:has-text('저장')")
@@ -126,11 +126,11 @@ class FeedbackUiTests(unittest.TestCase):
                   box.querySelectorAll('a').forEach((a) => a.addEventListener('click', (e) => e.preventDefault()));
                 }""")
                 color = lambda sel: page.locator(sel).evaluate("e => getComputedStyle(e).color")  # noqa: E731
-                self.assertEqual(color("#link-test a >> nth=0"), "rgb(138, 180, 255)")
+                self.assertEqual(color("#link-test a >> nth=0"), "rgb(168, 209, 255)")  # 1.19.1 더 밝게
                 page.click("#link-test a >> nth=0")
                 self.assertEqual(page.locator("#link-test a >> nth=0").get_attribute("data-visited"), "")
-                self.assertEqual(color("#link-test a >> nth=0"), "rgb(201, 168, 255)")
-                self.assertEqual(color("#link-test a >> nth=1"), "rgb(138, 180, 255)")
+                self.assertEqual(color("#link-test a >> nth=0"), "rgb(217, 194, 255)")
+                self.assertEqual(color("#link-test a >> nth=1"), "rgb(168, 209, 255)")
                 # 다시 열어도(같은 주소가 다시 그려져도) 다녀온 링크로 보인다
                 page.reload()
                 page.wait_for_selector("#composer")
@@ -183,18 +183,62 @@ class FeedbackUiTests(unittest.TestCase):
                 self.assertTrue(page.is_visible("#sidebar"))
                 self.assertFalse(page.evaluate("document.querySelector('#app').classList.contains('collapsed')"))
                 page.click("#btn-new")
-                # 네이티브 막대가 있으면 앱 화면의 주소 표시줄에서 '기본 브라우저로 열기'·'닫기'를 뺀다
+                # 1.19.1: 네이티브 막대가 있으면 채팅 위 주소 줄(주소 칸·이동·기본 브라우저로 열기·닫기)을 통째로 뺀다
                 page.evaluate("browserEvent({ visible: true, url: 'https://example.com/', mode: 'native', toolbar: true })")
                 page.wait_for_selector("#browser-bar", state="visible")
-                self.assertFalse(page.is_visible("#browser-external"))
-                self.assertFalse(page.is_visible("#browser-close"))
+                for sel in ("#browser-address", "#browser-back", "#browser-external", "#browser-close"):
+                    self.assertFalse(page.is_visible(sel), sel)
+                self.assertTrue(page.is_visible("#browser-ask-page"))  # AI에게 묻기 버튼은 채팅 위에 남는다
                 page.evaluate("browserEvent({ toolbar: false })")
-                self.assertTrue(page.is_visible("#browser-external"))
-                self.assertTrue(page.is_visible("#browser-close"))
+                for sel in ("#browser-address", "#browser-back", "#browser-external", "#browser-close"):
+                    self.assertTrue(page.is_visible(sel), sel)
                 self.assertEqual(errors, [])
             finally:
                 browser.close()
 
+
+    def test_credit_bar_skill_korean_and_button_links(self):
+        """1.19.1: 크레딧 막대, 플러그인 스킬의 한국어 설명, 버튼 모양 링크 색."""
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as p:
+            browser, page, errors = self.page(p)
+            try:
+                self.close_modals(page)
+                # 크레딧 막대: 사용량/한도 비율로 채우고 90%부터 경고 색
+                page.evaluate("S.credit = { usage: 300, limit: 1000, interval: 'WEEKLY' }; S.creditAt = Date.now()")
+                page.evaluate("showUsage()")
+                bar = page.locator("#modal-root [data-credit-bar]")
+                bar.wait_for()
+                self.assertEqual(bar.get_attribute("aria-valuenow"), "30")
+                self.assertIn("30%", page.locator("#modal-root .credit-fill").get_attribute("style"))
+                page.evaluate("window.onBackendEvent({ type: 'credit', credit: { usage: 950, limit: 1000, interval: 'WEEKLY' } })")
+                self.assertEqual(bar.get_attribute("aria-valuenow"), "95")
+                self.assertIn("danger", bar.get_attribute("class"))
+                self.assertIn("95%", page.locator("#modal-root [data-credit]").inner_text())
+                self.shot(page, "credit-bar")
+                self.close_modals(page)
+                # 플러그인 스킬: 스킬 목록과 / 메뉴에 한국어 설명, 영문 원문은 접어 둔다
+                page.evaluate("""S.skills = [{ name: 'productivity:start', description: 'Initialize the productivity system',
+                  description_ko: '생산성 시스템을 설정합니다.', source: '플러그인 productivity', path: '' },
+                  { name: 'summarize', description: '긴 글을 요약', description_ko: '', source: '내장', path: '' }]""")
+                page.click("#btn-skills")
+                item = page.locator(".skill-item:has-text('productivity:start')")
+                item.wait_for()
+                self.assertIn("생산성 시스템을 설정합니다.", item.inner_text())
+                self.assertFalse(item.locator(".plugin-orig p").is_visible())
+                self.assertEqual(page.locator(".skill-item:has-text('summarize') .plugin-orig").count(), 0)
+                self.shot(page, "skills-korean")
+                self.close_modals(page)
+                self.assertEqual(page.evaluate("slashItems('productivity')[0].description"), "생산성 시스템을 설정합니다.")
+                # 버튼 모양 링크는 브라우저 기본 파랑이 아니라 밝은 링크 색, 밑줄 없음
+                page.evaluate("""() => { const a = document.createElement('a'); a.className = 'btn'; a.id = 'btn-link';
+                  a.href = 'https://example.com/home'; a.textContent = '홈페이지'; document.body.append(a); }""")
+                style = page.locator("#btn-link").evaluate("e => [getComputedStyle(e).color, getComputedStyle(e).textDecorationLine]")
+                self.assertEqual(style, ["rgb(168, 209, 255)", "none"])
+                self.assertEqual(errors, [])
+            finally:
+                browser.close()
 
 if __name__ == "__main__":
     unittest.main()

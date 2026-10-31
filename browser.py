@@ -173,7 +173,8 @@ class Browser:
         self.state.update(changes)
         if self.on_event:
             try:
-                # toolbar: 1.19 웹페이지 위에 네이티브 막대(기본 브라우저로 열기·닫기)를 붙였는지. 화면은 그 버튼을 빼고 그린다
+                # toolbar: 웹페이지 위에 네이티브 막대(1.19.1: 주소 칸·이동·기본 브라우저로 열기·닫기)를 붙였는지.
+                # 화면은 붙였으면 채팅 위 주소 줄을 빼고 그린다
                 self.on_event(dict(self.state, visible=self.visible, mode=self.mode,
                                    toolbar=bool(getattr(self._backend, "toolbar", False))))
             except Exception:
@@ -250,6 +251,30 @@ class Browser:
         url = self.state.get("url", "")
         if url and allowed(url) and self.opener:
             self.opener(url)
+
+    # 1.19.1 웹페이지 위 막대의 주소 칸·이동 버튼. 네이티브 처리기가 작업 스레드에서 부르므로 오류는 화면 알림으로 돌린다
+    def bar_open(self, text):
+        if not str(text or "").strip():
+            return
+        try:
+            self.open(text)
+        except Exception as e:
+            self.blocked(str(text)[:300], str(e) if isinstance(e, BrowserError) else f"주소를 열지 못했습니다: {e}")
+
+    def bar_nav(self, action):
+        try:
+            self.nav(action)
+        except Exception:
+            pass  # 브라우저가 닫히는 중이면 버튼을 눌러도 할 일이 없다
+
+    def focus_address(self):
+        """브라우저를 열 때 웹페이지 위 막대의 주소 칸에 입력할 수 있게 한다(막대가 없으면 아무것도 하지 않는다)."""
+        backend = self._backend
+        fn = getattr(backend, "focus_address", None) if backend is not None else None
+        if fn is not None and getattr(backend, "toolbar", False):
+            fn()
+            return True
+        return False
 
     def nav(self, action):
         if action not in ("back", "forward", "reload", "stop"):

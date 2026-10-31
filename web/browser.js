@@ -3,7 +3,8 @@
 "use strict";
 
 /* ---------- 브라우저(1.13): 채팅 옆 웹페이지 ----------
-   웹페이지는 앱 창 오른쪽의 네이티브 웹 뷰가 그리고(browser.py), 여기에는 주소 표시줄과 AI 연결 버튼만 둔다.
+   웹페이지는 앱 창 오른쪽의 네이티브 웹 뷰가 그리고(browser.py), 여기에는 AI 연결 버튼만 둔다. 주소 칸·이동 버튼은
+   1.19.1부터 웹페이지 위 네이티브 막대에 있고, 막대를 못 만들었을 때(도킹·안드로이드)만 여기 주소 줄을 보인다.
    웹페이지 쪽에는 POSCHAT API가 없다. 이 화면이 browser_* 를 불러 페이지를 읽고 채팅 첨부로 만든다. */
 
 const BR = { open: false, available: true, url: "", title: "", loading: false, can_back: false, can_forward: false,
@@ -25,12 +26,12 @@ function browserBar() {
   } }, address);
   const action = (id, label, title, onclick) => h("button", { class: "btn browser-action", id, title, onclick }, label);
   bar = h("section", { id: "browser-bar", "aria-label": "브라우저", hidden: true },
-    h("div", { class: "browser-row" },
+    // 1.19.1: 웹페이지 위에 네이티브 막대(주소 칸·이동·기본 브라우저로 열기·닫기)가 있으면 이 주소 줄 전체를 숨긴다
+    h("div", { class: "browser-row", id: "browser-nav-row" },
       btn("back", "뒤로", () => browserNav("back"), { id: "browser-back" }),
       btn("forward", "앞으로", () => browserNav("forward"), { id: "browser-forward" }),
       btn("retry", "새로 고침", () => browserNav(BR.loading ? "stop" : "reload"), { id: "browser-reload" }),
       form,
-      // 1.19: 네이티브 웹페이지 위에 막대(기본 브라우저로 열기·닫기)가 있으면 이 두 버튼은 숨긴다(renderBrowserBar)
       btn("external", "기본 브라우저로 열기", () => browserCall(api().browser_external()), { id: "browser-external" }),
       btn("close", "브라우저 닫기", () => browserClose(), { id: "browser-close" })),
     h("div", { class: "browser-row browser-actions" },
@@ -57,8 +58,7 @@ function renderBrowserBar() {
   $("#btn-browser")?.setAttribute("aria-pressed", String(BR.open));
   const address = $("#browser-address");
   if (address && document.activeElement !== address) address.value = BR.url || "";
-  $("#browser-external").hidden = !!BR.toolbar;
-  $("#browser-close").hidden = !!BR.toolbar;
+  $("#browser-nav-row").hidden = !!BR.toolbar;
   $("#browser-back").disabled = !BR.can_back;
   $("#browser-forward").disabled = !BR.can_forward;
   const reload = $("#browser-reload");
@@ -106,7 +106,8 @@ async function browserToggle() {
     return;
   }
   setCollapsed(true);
-  setTimeout(() => $("#browser-address")?.focus(), 50);
+  if (BR.toolbar) api().browser_focus_address?.();  // 1.19.1 주소 칸은 웹페이지 위 막대에 있다
+  else setTimeout(() => $("#browser-address")?.focus(), 50);
 }
 
 async function browserOpen(text) {
