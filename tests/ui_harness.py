@@ -75,8 +75,12 @@ def serve(bridge, events, port=0):
             if self.path == "/favicon.ico":
                 return self._send(204, b"", "image/x-icon")
             if self.path == "/events":
+                # 복사와 비우기 사이에 앱의 이벤트 스레드가 더한 이벤트를 잃지 않도록, 복사한 만큼만 지운다
+                # (예전에는 그 사이에 온 이벤트가 사라져 SSH 'connected' 같은 이벤트를 화면이 못 받는 일이 있었다)
                 with lock:
-                    out, events[:] = list(events), []
+                    n = len(events)
+                    out = events[:n]
+                    del events[:n]
                 return self._send(200, out)
             path = (ROOT / "web" / self.path.lstrip("/").split("?")[0]).resolve()
             if self.path in ("/", ""):
