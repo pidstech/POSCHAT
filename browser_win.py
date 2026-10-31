@@ -34,8 +34,9 @@ class WebView2Backend:
             raise browser_mod.BrowserError("앱 창을 찾지 못했습니다.")
         self.browser = browser
         self.view = None
-        self.pane = None  # 1.19: 웹페이지 위 막대(제목·기본 브라우저로 열기·닫기) + 웹페이지
-        self.title_label = None
+        self.pane = None  # 1.19: 웹페이지 위 막대 + 웹페이지
+        self.address = self.back_btn = self.forward_btn = self.reload_btn = None  # 1.19.1: 막대의 주소 칸·이동 버튼
+        self._glyph = {}
         self.toolbar = False
         self.splitter = None
         self.ready = threading.Event()
@@ -103,9 +104,13 @@ class WebView2Backend:
         self.view, self.pane, self.splitter = view, pane, splitter
 
     def _make_toolbar(self):
-        """웹페이지 위 막대: 왼쪽은 페이지 제목, 오른쪽은 '기본 브라우저로 열기'와 '닫기'. 앱 테마(밝음·어두움)를 따른다."""
+        """웹페이지 위 막대(1.19.1): 뒤로·앞으로·새로 고침, 주소 입력, '기본 브라우저로 열기', '닫기'.
+
+        1.19.0은 버튼을 AutoSize·Padding으로 두어 화면 배율에 따라 글자 윗부분이 잘렸다. 이제 막대 높이를 넉넉히 잡고
+        버튼은 막대 높이를 그대로 채운 채 글자를 가운데 놓는다. 주소 칸은 높이를 재서 세로 가운데에 둔다.
+        """
         import winreg
-        from System.Drawing import ContentAlignment, Font, FontStyle
+        from System.Drawing import ContentAlignment, Font, FontStyle, Size
 
         try:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
@@ -113,52 +118,124 @@ class WebView2Backend:
                 dark = winreg.QueryValueEx(k, "AppsUseLightTheme")[0] == 0
         except OSError:
             dark = False
-        bg, fg, hover = (("#212121", "#ececec", "#2f2f2f") if dark else ("#f9f9f9", "#0d0d0d", "#ececec"))
+        bg, fg, hover, field, line = (("#212121", "#ececec", "#2f2f2f", "#303030", "#383838") if dark
+                                      else ("#f9f9f9", "#0d0d0d", "#ececec", "#ffffff", "#e5e5e5"))
         try:
             scale = self.form.DeviceDpi / 96
         except Exception:
             scale = 1.0
         px = lambda v: int(round(v * scale))  # noqa: E731
+        bar_h = px(42)
         bar = WinForms.Panel()
         bar.Dock = WinForms.DockStyle.Top
-        bar.Height = px(36)
-        bar.Padding = WinForms.Padding(px(10), px(4), px(6), px(4))
+        bar.Height = bar_h
+        bar.Padding = WinForms.Padding(px(4), 0, px(4), 0)  # 세로 여백 없음: 버튼이 막대 높이를 채운다
         bar.BackColor = _color(bg)
         font = Font("Malgun Gothic", 9.0, FontStyle.Regular)
+        icon_font = Font("Segoe MDL2 Assets", 10.0, FontStyle.Regular)
+        icons = icon_font.Name == "Segoe MDL2 Assets"  # Windows 10 이상. 없으면 글자 화살표를 쓴다
+        glyph = {"back": "\uE72B", "forward": "\uE72A", "reload": "\uE72C", "stop": "\uE711"} if icons else \
+            {"back": "←", "forward": "→", "reload": "↻", "stop": "✕"}
+        self._glyph = glyph
 
-        title = WinForms.Label()
-        title.Dock = WinForms.DockStyle.Fill
-        title.AutoEllipsis = True
-        title.TextAlign = ContentAlignment.MiddleLeft
-        title.ForeColor = _color(fg)
-        title.Font = font
-        title.Text = "브라우저"
-
-        def button(text, tip, handler):
+        def button(text, tip, handler, dock, use_icon=False):
             b = WinForms.Button()
             b.Text = text
-            b.Dock = WinForms.DockStyle.Right
-            b.AutoSize = True
+            b.Dock = dock
+            b.AutoSize = False
+            b.UseCompatibleTextRendering = False
+            b.TextAlign = ContentAlignment.MiddleCenter
+            b.Font = icon_font if use_icon and icons else font
+            b.Width = px(34) if use_icon else WinForms.TextRenderer.MeasureText(text, font).Width + px(18)
             b.FlatStyle = WinForms.FlatStyle.Flat
             b.FlatAppearance.BorderSize = 0
             b.FlatAppearance.MouseOverBackColor = _color(hover)
             b.ForeColor = _color(fg)
             b.BackColor = _color(bg)
-            b.Font = font
             b.Cursor = WinForms.Cursors.Hand
             b.TabStop = True
             b.AccessibleName = tip
             WinForms.ToolTip().SetToolTip(b, tip)
-            # 처리기는 UI 스레드에서 돈다: UI 스레드를 기다리는 일(hide → _invoke)은 작업 스레드로 넘긴다(B1)
+            # 처리기는 UI 스레드에서 돈다: UI 스레드를 기다리는 일(hide·nav → _invoke)은 작업 스레드로 넘긴다(B1)
             b.Click += lambda s, e: threading.Thread(target=handler, daemon=True).start()
             return b
 
-        # Dock은 나중에 넣은 것부터 자리를 잡는다: 닫기(맨 오른쪽) → 기본 브라우저로 열기 → 제목(나머지)
-        bar.Controls.Add(title)
-        bar.Controls.Add(button("↗ 기본 브라우저로 열기", "지금 페이지를 기본 브라우저로 엽니다", self.browser.open_external))
-        bar.Controls.Add(button("✕ 닫기", "브라우저 닫기", self.browser.hide))
-        self.title_label = title
+        # 주소 칸: 한 줄 TextBox는 높이를 글꼴이 정하므로 패널에 넣고 위 여백으로 세로 가운데에 둔다
+        address = WinForms.TextBox()
+        address.Font = Font("Malgun Gothic", 10.0, FontStyle.Regular)
+        address.BorderStyle = WinForms.BorderStyle.FixedSingle
+        address.BackColor = _color(field)
+        address.ForeColor = _color(fg)
+        address.Dock = WinForms.DockStyle.Top
+        address.AccessibleName = "주소 또는 검색어"
+        try:
+            address.PlaceholderText = "주소 또는 검색어"  # .NET Core 3 이상
+        except Exception:
+            pass
+        address.KeyDown += self._on_address_key
+        holder = WinForms.Panel()
+        holder.Dock = WinForms.DockStyle.Fill
+        top = max(0, (bar_h - address.PreferredHeight) // 2)
+        holder.Padding = WinForms.Padding(px(6), top, px(6), 0)
+        holder.BackColor = _color(bg)
+        holder.Controls.Add(address)
+
+        back = button(glyph["back"], "뒤로", lambda: self.browser.bar_nav("back"), WinForms.DockStyle.Left, True)
+        forward = button(glyph["forward"], "앞으로", lambda: self.browser.bar_nav("forward"), WinForms.DockStyle.Left, True)
+        reload = button(glyph["reload"], "새로 고침",
+                        lambda: self.browser.bar_nav("stop" if self.browser.state.get("loading") else "reload"),
+                        WinForms.DockStyle.Left, True)
+        external = button("↗ 기본 브라우저로 열기", "지금 페이지를 기본 브라우저로 엽니다", self.browser.open_external,
+                          WinForms.DockStyle.Right)
+        close = button("✕ 닫기", "브라우저 닫기", self.browser.hide, WinForms.DockStyle.Right)
+        back.Enabled = forward.Enabled = False
+        border = WinForms.Panel()  # 막대와 웹페이지 사이 가는 선
+        border.Dock = WinForms.DockStyle.Bottom
+        border.Height = max(1, px(1))
+        border.BackColor = _color(line)
+
+        # Dock은 나중에 넣은 것부터 자리를 잡는다: 선(아래) → 닫기(맨 오른쪽) → 기본 브라우저로 열기 → 뒤로(맨 왼쪽)
+        # → 앞으로 → 새로 고침 → 주소 칸(나머지)
+        for control in (holder, reload, forward, back, external, close, border):
+            bar.Controls.Add(control)
+        bar.MinimumSize = Size(0, bar_h)
+        self.address, self.back_btn, self.forward_btn, self.reload_btn = address, back, forward, reload
         return bar
+
+    def _on_address_key(self, sender, e):
+        if e.KeyCode == WinForms.Keys.Enter:
+            e.Handled = e.SuppressKeyPress = True  # 띵 소리 없이
+            text = str(sender.Text or "")
+            threading.Thread(target=self.browser.bar_open, args=(text,), daemon=True).start()
+        elif e.KeyCode == WinForms.Keys.Escape:
+            e.Handled = e.SuppressKeyPress = True
+            sender.Text = str(self.browser.state.get("url") or "")
+
+    def _sync_bar(self, url=None, loading=None, can_back=None, can_forward=None):
+        """막대의 주소·버튼 상태를 맞춘다(UI 스레드). 주소 칸에 입력하는 중이면 글자를 덮어쓰지 않는다."""
+        try:
+            if url is not None and self.address is not None and not self.address.Focused:
+                self.address.Text = url
+            if can_back is not None and self.back_btn is not None:
+                self.back_btn.Enabled = bool(can_back)
+            if can_forward is not None and self.forward_btn is not None:
+                self.forward_btn.Enabled = bool(can_forward)
+            if loading is not None and self.reload_btn is not None:
+                self.reload_btn.Text = self._glyph["stop" if loading else "reload"]
+                self.reload_btn.AccessibleName = "멈추기" if loading else "새로 고침"
+        except Exception:
+            pass
+
+    def focus_address(self):
+        """브라우저를 처음 열 때 주소 칸에 입력할 수 있게 한다."""
+        def go():
+            if self.address is not None:
+                self.address.Focus()
+                self.address.SelectAll()
+        try:
+            self._invoke(go)
+        except Exception:
+            pass
 
     def _on_ready(self, sender, args):
         if not args.IsSuccess:
@@ -195,11 +272,8 @@ class WebView2Backend:
         core = self.view.CoreWebView2 if self.view is not None else None
         if core is None:
             return
-        if self.title_label is not None:
-            try:
-                self.title_label.Text = str(core.DocumentTitle or core.Source or "브라우저")
-            except Exception:
-                pass
+        self._sync_bar(url=str(core.Source or ""), loading=loading, can_back=bool(core.CanGoBack),
+                       can_forward=bool(core.CanGoForward))
         self.browser.navigated(url=str(core.Source or ""), title=str(core.DocumentTitle or ""), loading=loading,
                                can_back=bool(core.CanGoBack), can_forward=bool(core.CanGoForward))
 
@@ -209,6 +283,7 @@ class WebView2Backend:
             e.Cancel = True
             self.browser.blocked(url, "http·https 주소만 열 수 있습니다.")
             return
+        self._sync_bar(loading=True)
         self.browser.navigated(loading=True)
 
     def _on_completed(self, sender, e):

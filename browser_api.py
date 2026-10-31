@@ -58,6 +58,11 @@ class BrowserApi:
     def browser_show(self):
         return self._browser_call(lambda: self._browser().show())
 
+    def browser_focus_address(self):
+        """1.19.1: 웹페이지 위 막대의 주소 칸으로 입력 초점을 옮긴다. 막대가 없으면 focused=False."""
+        b = self._browser(create=False)
+        return self._browser_call(lambda: {"focused": bool(b and b.visible and b.focus_address())})
+
     def browser_hide(self):
         b = self._browser(create=False)
         return self._browser_call(lambda: b.hide() if b else None)

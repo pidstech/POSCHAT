@@ -89,13 +89,13 @@ class BridgeSettingsTests(unittest.TestCase):
         self.addCleanup(self.bridge._events.stop)
 
     def test_window_mode_is_saved_and_unknown_values_are_ignored(self):
-        self.assertEqual(self.bridge.get_state()["config"]["window_mode"], "normal")
+        self.assertEqual(self.bridge.get_state()["config"]["window_mode"], "fullscreen")  # 1.19.1 기본값
         self.bridge.save_settings({"window_mode": "fullscreen"})
         self.assertEqual(storage.load_config()["window_mode"], "fullscreen")
         self.bridge.save_settings({"window_mode": "kiosk"})
         self.assertEqual(self.bridge.get_state()["config"]["window_mode"], "fullscreen")
         self.bridge._config["window_mode"] = "weird"
-        self.assertEqual(self.bridge._window_mode(), "normal")
+        self.assertEqual(self.bridge._window_mode(), "fullscreen")
 
     def test_run_app_passes_the_window_mode_to_pywebview(self):
         tree = ast.parse((ROOT / "main.py").read_text(encoding="utf-8"))

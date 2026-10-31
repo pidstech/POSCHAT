@@ -45,6 +45,7 @@ class _Delegate(AppKit.NSObject):
                                        "다운로드는 기본 브라우저에서 하세요(외부 브라우저로 열기).")
 
     def webView_didStartProvisionalNavigation_(self, webview, nav):
+        self.owner._sync_bar(loading=True)
         self.owner.browser.navigated(loading=True)
 
     def webView_didFinishNavigation_(self, webview, nav):
@@ -65,6 +66,21 @@ class _Delegate(AppKit.NSObject):
     def openExternal_(self, sender):
         threading.Thread(target=self.owner.browser.open_external, daemon=True).start()
 
+    # 1.19.1 막대의 이동 버튼·주소 칸
+    def goBack_(self, sender):
+        threading.Thread(target=self.owner.browser.bar_nav, args=("back",), daemon=True).start()
+
+    def goForward_(self, sender):
+        threading.Thread(target=self.owner.browser.bar_nav, args=("forward",), daemon=True).start()
+
+    def reloadPage_(self, sender):
+        action = "stop" if self.owner.browser.state.get("loading") else "reload"
+        threading.Thread(target=self.owner.browser.bar_nav, args=(action,), daemon=True).start()
+
+    def addressEntered_(self, sender):
+        text = str(sender.stringValue() or "")
+        threading.Thread(target=self.owner.browser.bar_open, args=(text,), daemon=True).start()
+
     def webView_createWebViewWithConfiguration_forNavigationAction_windowFeatures_(self, webview, config, action,
                                                                                   features):
         url = str(action.request().URL().absoluteString() or "")
@@ -84,7 +100,7 @@ class WKWebViewBackend:
         self.split = None
         self.view = None
         self.pane = None  # 1.19: 웹페이지 위 막대 + 웹페이지
-        self.title_label = None
+        self.address = self.back_btn = self.forward_btn = self.reload_btn = None  # 1.19.1 막대의 주소 칸·이동 버튼
         self.toolbar = False
         self.main_view = None
         self.delegate = None
@@ -139,8 +155,11 @@ class WKWebViewBackend:
         self.split, self.view, self.pane, self.main_view = split, view, pane, main
 
     def _make_pane(self, frame, view):
-        """웹페이지와 그 위 막대(제목·기본 브라우저로 열기·닫기)를 담은 보기. 좌표는 왼쪽 아래가 원점이다."""
-        bar_h = 34
+        """웹페이지와 그 위 막대(1.19.1: 뒤로·앞으로·새로 고침, 주소 칸, 기본 브라우저로 열기, 닫기). 좌표는 왼쪽 아래가 원점이다.
+
+        막대는 버튼 높이보다 넉넉하게(40) 잡고 모든 컨트롤을 세로 가운데에 둔다(1.19.0은 윗부분이 살짝 잘렸다).
+        """
+        bar_h = 40
         w, h = frame.size.width, frame.size.height
         pane = AppKit.NSView.alloc().initWithFrame_(frame)
         pane.setAutoresizingMask_(AppKit.NSViewWidthSizable | AppKit.NSViewHeightSizable)
@@ -149,38 +168,97 @@ class WKWebViewBackend:
         pane.addSubview_(view)
         bar = AppKit.NSView.alloc().initWithFrame_(Foundation.NSMakeRect(0, h - bar_h, w, bar_h))
         bar.setAutoresizingMask_(AppKit.NSViewWidthSizable | AppKit.NSViewMinYMargin)
+
+        def place(control, x, width, mask):
+            ch = control.frame().size.height
+            control.setFrame_(Foundation.NSMakeRect(x, round((bar_h - ch) / 2), width, ch))
+            control.setAutoresizingMask_(mask)
+            bar.addSubview_(control)
+
+        def nav_button(image_name, fallback, tip, action):
+            image = AppKit.NSImage.imageNamed_(image_name) if image_name else None
+            if image is not None:
+                b = AppKit.NSButton.buttonWithImage_target_action_(image, self.delegate, action)
+            else:
+                b = AppKit.NSButton.buttonWithTitle_target_action_(fallback, self.delegate, action)
+            b.setToolTip_(tip)
+            b.sizeToFit()
+            return b
+
+        # 오른쪽: 닫기(맨 오른쪽) → 기본 브라우저로 열기
         close = AppKit.NSButton.buttonWithTitle_target_action_("닫기", self.delegate, "closeBrowser:")
         close.setToolTip_("브라우저 닫기")
         external = AppKit.NSButton.buttonWithTitle_target_action_("기본 브라우저로 열기", self.delegate, "openExternal:")
         external.setToolTip_("지금 페이지를 기본 브라우저로 엽니다")
-        x = w - 8
+        right = w - 8
         for b in (close, external):
             b.sizeToFit()
-            bw, bh = b.frame().size.width, b.frame().size.height
-            x -= bw
-            b.setFrame_(Foundation.NSMakeRect(x, (bar_h - bh) / 2, bw, bh))
-            b.setAutoresizingMask_(AppKit.NSViewMinXMargin)
-            bar.addSubview_(b)
-            x -= 4
-        label = AppKit.NSTextField.labelWithString_("브라우저")
-        label.setLineBreakMode_(AppKit.NSLineBreakByTruncatingTail)
-        label.setTextColor_(AppKit.NSColor.secondaryLabelColor())
-        label.sizeToFit()
-        lh = label.frame().size.height
-        label.setFrame_(Foundation.NSMakeRect(10, (bar_h - lh) / 2, max(40, x - 14), lh))
-        label.setAutoresizingMask_(AppKit.NSViewWidthSizable)
-        bar.addSubview_(label)
+            bw = b.frame().size.width
+            right -= bw
+            place(b, right, bw, AppKit.NSViewMinXMargin)
+            right -= 4
+        # 왼쪽: 뒤로 → 앞으로 → 새로 고침
+        back = nav_button(getattr(AppKit, "NSImageNameGoLeftTemplate", "NSGoLeftTemplate"), "←", "뒤로", "goBack:")
+        forward = nav_button(getattr(AppKit, "NSImageNameGoRightTemplate", "NSGoRightTemplate"), "→", "앞으로", "goForward:")
+        reload = nav_button(getattr(AppKit, "NSImageNameRefreshTemplate", "NSRefreshTemplate"), "↻", "새로 고침", "reloadPage:")
+        x = 8
+        for b in (back, forward, reload):
+            bw = max(30, b.frame().size.width)
+            place(b, x, bw, AppKit.NSViewMaxXMargin)
+            x += bw + 2
+        back.setEnabled_(False)
+        forward.setEnabled_(False)
+        # 가운데: 주소 칸(Enter로 연다)
+        address = AppKit.NSTextField.alloc().initWithFrame_(Foundation.NSMakeRect(0, 0, 100, 24))
+        address.setPlaceholderString_("주소 또는 검색어")
+        address.setBezelStyle_(AppKit.NSTextFieldRoundedBezel)
+        address.setTarget_(self.delegate)
+        address.setAction_("addressEntered:")
+        address.cell().setSendsActionOnEndEditing_(False)  # Enter를 눌렀을 때만 연다
+        address.cell().setScrollable_(True)
+        address.setAccessibilityLabel_("주소 또는 검색어")
+        place(address, x + 4, max(60, right - x - 8), AppKit.NSViewWidthSizable)
         line = AppKit.NSBox.alloc().initWithFrame_(Foundation.NSMakeRect(0, 0, w, 1))
         line.setBoxType_(AppKit.NSBoxSeparator)
         line.setAutoresizingMask_(AppKit.NSViewWidthSizable)
         bar.addSubview_(line)
         pane.addSubview_(bar)
-        self.title_label = label
+        self.address, self.back_btn, self.forward_btn, self.reload_btn = address, back, forward, reload
         return pane
+
+    def _sync_bar(self, url=None, loading=None, can_back=None, can_forward=None):
+        """막대의 주소·버튼 상태를 맞춘다(메인 스레드). 주소 칸에 입력하는 중이면 글자를 덮어쓰지 않는다."""
+        try:
+            if url is not None and self.address is not None and self.address.currentEditor() is None:
+                self.address.setStringValue_(url)
+            if can_back is not None and self.back_btn is not None:
+                self.back_btn.setEnabled_(bool(can_back))
+            if can_forward is not None and self.forward_btn is not None:
+                self.forward_btn.setEnabled_(bool(can_forward))
+            if loading is not None and self.reload_btn is not None:
+                self.reload_btn.setToolTip_("멈추기" if loading else "새로 고침")
+                name = getattr(AppKit, "NSImageNameStopProgressTemplate" if loading else "NSImageNameRefreshTemplate", None)
+                image = AppKit.NSImage.imageNamed_(name) if name else None
+                if image is not None:
+                    self.reload_btn.setImage_(image)
+        except Exception:
+            pass
+
+    def focus_address(self):
+        """브라우저를 처음 열 때 주소 칸에 입력할 수 있게 한다."""
+        def go():
+            if self.address is not None:
+                self.ns_window.makeFirstResponder_(self.address)
+                self.address.selectText_(None)
+        try:
+            self._run(go)
+        except Exception:
+            pass
 
     def report(self, webview, loading=None):
         url = webview.URL()
-        self._set_title(str(webview.title() or "") or (str(url.absoluteString()) if url is not None else ""))
+        self._sync_bar(url=str(url.absoluteString()) if url is not None else None, loading=loading,
+                       can_back=bool(webview.canGoBack()), can_forward=bool(webview.canGoForward()))
         self.browser.navigated(url=str(url.absoluteString()) if url is not None else "", title=str(webview.title() or ""),
                                loading=loading, can_back=bool(webview.canGoBack()),
                                can_forward=bool(webview.canGoForward()))
@@ -188,16 +266,8 @@ class WKWebViewBackend:
     def title_handler(self, webview):
         def done(result, error):
             if error is None and result:
-                self._set_title(str(result))
                 self.browser.navigated(title=str(result))
         return done
-
-    def _set_title(self, text):
-        if self.title_label is not None and text:
-            try:
-                self.title_label.setStringValue_(text)
-            except Exception:
-                pass
 
     def _layout(self, ratio):
         width = self.split.frame().size.width

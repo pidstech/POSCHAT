@@ -23,6 +23,7 @@ import attachments
 import connectors
 import documents
 import mcp_client
+import plugins
 import po_note
 import storage
 import stt
@@ -45,6 +46,7 @@ from version import APP_VERSION
 APP_TITLE = "POSCHAT"
 UPDATE_INTERVAL = 6 * 3600  # 시작할 때 새 버전을 확인하는 최소 간격(초)
 WINDOW_MODES = ("normal", "maximized", "fullscreen")  # 1.19 설정: 앱을 열 때의 창 크기
+DEFAULT_WINDOW_MODE = "fullscreen"  # 1.19.1: 처음부터 전체 화면으로 연다(F11로 끈다)
 UPDATE_EXIT_TIMEOUT = 15  # 업데이트하려고 창을 닫은 뒤 정리가 끝나지 않아도 이 시간(초)이 지나면 프로세스를 끝낸다
 PO_RESERVES = (0, 10, 20, 30, 50)  # PO노트 크레딧 예산 보호: 이번 주 한도의 몇 %를 남겨 둘지(0은 끄기)
 
@@ -114,6 +116,12 @@ class Bridge(WorkspaceApi, BrowserApi, PaperApi, CodeApi, CodeAgentApi, SshApi, 
         storage.ensure_dirs()
         self._config = storage.load_config()
         storage.migrate_config_secrets(self._config)   # 1.18.9: 평문 키를 비밀 저장소로
+        if self._config.get("window_mode") == "normal" and not self._config.get("window_mode_191"):
+            # 1.19.1: 기본값이 전체 화면이 됐다. 1.19.0은 설정을 저장할 때마다 고르지 않은 '기본 창'도 함께 저장했으므로
+            # 그 값은 한 번 지워 새 기본값을 따르게 한다(최대화·전체 화면을 고른 값은 그대로 둔다)
+            self._config.pop("window_mode", None)
+            self._config["window_mode_191"] = True
+            storage.save_config(self._config)
         if "github_update_token" in self._config:  # 1.8.0의 업데이트 확인용 GitHub 토큰은 더 쓰지 않는다
             self._config.pop("github_update_token", None)
             storage.save_config(self._config)
@@ -257,7 +265,9 @@ class Bridge(WorkspaceApi, BrowserApi, PaperApi, CodeApi, CodeAgentApi, SshApi, 
         }
 
     def _skills(self):
-        return [{"name": s.name, "description": s.description, "source": s.source, "path": str(s.path)}
+        # 1.19.1: 플러그인 스킬은 플러그인 화면처럼 한국어 설명(description_ko)을 함께 준다. 모델에는 원문이 간다
+        return [{"name": s.name, "description": s.description, "source": s.source, "path": str(s.path),
+                 "description_ko": plugins.skill_ko(s.name) if s.source.startswith("플러그인 ") else ""}
                 for s in discover_skills(self._workspace()).values()]
 
     # ---- 상태 ----
@@ -507,6 +517,7 @@ class Bridge(WorkspaceApi, BrowserApi, PaperApi, CodeApi, CodeAgentApi, SshApi, 
                 self._config["developer_mode"] = bool(settings["developer_mode"])
             if settings.get("window_mode") in WINDOW_MODES:  # 1.19: 다음에 앱을 열 때의 창 크기
                 self._config["window_mode"] = settings["window_mode"]
+                self._config["window_mode_191"] = True  # 1.19.1 이후에 고른 '기본 창'은 그대로 둔다
             self._stamp_settings(before)
             storage.save_config(self._config)
         return self.get_state()
@@ -588,7 +599,7 @@ class Bridge(WorkspaceApi, BrowserApi, PaperApi, CodeApi, CodeAgentApi, SshApi, 
 
     def _window_mode(self):
         mode = self._config.get("window_mode")
-        return mode if mode in WINDOW_MODES else "normal"
+        return mode if mode in WINDOW_MODES else DEFAULT_WINDOW_MODE
 
     def toggle_fullscreen(self):
         """F11: 전체 화면을 켜고 끈다(1.19). 설정의 '시작할 때 창 크기'는 바꾸지 않는다."""

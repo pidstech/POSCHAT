@@ -304,6 +304,16 @@ def localize(data):
     return data
 
 
+def skill_ko(full_name):
+    """1.19.1: 설치한 플러그인 스킬·명령('플러그인:이름')의 한국어 설명. 스킬 목록·/ 메뉴가 쓴다. 없으면 ""."""
+    from plugins_ko import KO
+
+    plugin, sep, short = str(full_name or "").partition(":")
+    if not sep:
+        return ""
+    return KO.get(f"{plugin}/{short}") or KO.get(f"{plugin}/cmd:{short}") or ""
+
+
 def catalog(refresh=False):
     """목록(받아 둔 것이 있으면 그것). refresh면 새로 받는다. 한국어 설명을 붙여 돌려준다."""
     with _lock:

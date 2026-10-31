@@ -880,7 +880,7 @@ function slashItems(query) {
     { name: "memory", description: "기억 목록 보기·지우기" },
     { name: "usage", description: "사용량(AI 호출·토큰·크레딧) 보기" },
     { name: "help", description: "도움말" },
-    ...S.skills.map((s) => ({ name: s.name, description: s.description })),
+    ...S.skills.map((s) => ({ name: s.name, description: s.description_ko || s.description })),  // 1.19.1 플러그인 스킬은 한국어
   ];
   const q = query.toLowerCase();
   return base.filter((it) => it.name.toLowerCase().startsWith(q) || (q && it.name.toLowerCase().includes(q)));
@@ -946,7 +946,7 @@ window.onBackendEvent = (ev) => {
     updateEvent(ev);
   } else if (ev.type === "credit") {
     S.credit = ev.credit;
-    document.querySelectorAll("[data-credit]").forEach((el) => { el.textContent = creditText(S.credit); });
+    renderCredit();
   } else if (ev.type === "plms") {
     toast(ev.message);
   } else if (ev.type === "browser") {
@@ -992,6 +992,34 @@ function creditText(c) {
   if (!c.limit) return `${when} ${used} 크레딧 사용`;
   const left = Math.max(0, Math.round(c.limit - c.usage)).toLocaleString();
   return `${when} ${used} / ${Math.round(c.limit).toLocaleString()} 크레딧 사용 · 남은 ${left} (${Math.round(c.usage / c.limit * 100)}%)`;
+}
+
+/* 1.19.1 크레딧 막대: 이번 주기 한도 대비 사용량. 70%부터 주의(노랑), 90%부터 경고(빨강) 색 */
+function creditBar() {
+  const fill = h("span", { class: "credit-fill" });
+  const bar = h("div", { class: "credit-bar", "data-credit-bar": "", role: "meter", "aria-label": "크레딧 사용량",
+    "aria-valuemin": "0", "aria-valuemax": "100" }, fill);
+  paintCreditBar(bar, S.credit);
+  return bar;
+}
+
+function paintCreditBar(bar, c) {
+  const known = !!(c && c.usage != null && c.limit);
+  bar.hidden = !known;
+  if (!known) return;
+  const pct = Math.max(0, Math.min(100, c.usage / c.limit * 100));
+  const fill = bar.firstChild;
+  fill.style.width = `${pct}%`;
+  bar.classList.toggle("warn", pct >= 70 && pct < 90);
+  bar.classList.toggle("danger", pct >= 90);
+  bar.setAttribute("aria-valuenow", String(Math.round(pct)));
+  bar.setAttribute("aria-valuetext", creditText(c));
+  bar.title = creditText(c);
+}
+
+function renderCredit() {
+  document.querySelectorAll("[data-credit]").forEach((el) => { el.textContent = creditText(S.credit); });
+  document.querySelectorAll("[data-credit-bar]").forEach((el) => paintCreditBar(el, S.credit));
 }
 
 /* 이 앱이 보낸 AI 호출 수·토큰(storage.usage_summary). 설정 창과 /usage(채팅·Code 작업 탭)가 함께 쓴다 */
@@ -1090,7 +1118,7 @@ function creditLine(auto = true) {
       if (res.ok === false) text.textContent = res.error;
       else {
         S.credit = res;
-        document.querySelectorAll("[data-credit]").forEach((el) => { el.textContent = creditText(S.credit); });
+        renderCredit();
       }
     } finally {
       btn.disabled = false;
@@ -1102,7 +1130,7 @@ function creditLine(auto = true) {
     S.creditAt = Date.now();
     setTimeout(refresh, 0);
   }
-  return h("div", { class: "row credit-line" }, text, btn);
+  return h("div", { class: "credit-box" }, h("div", { class: "row credit-line" }, text, btn), creditBar());
 }
 
 /* ---------- 모달 ---------- */
@@ -1357,7 +1385,7 @@ function showSettings() {
     h("option", { value: "normal" }, "기본 창"),
     h("option", { value: "maximized" }, "최대화"),
     h("option", { value: "fullscreen" }, "전체 화면"));
-  windowMode.value = c.window_mode || "normal";
+  windowMode.value = c.window_mode || "fullscreen";  // 1.19.1 기본값: 전체 화면
   const responsesBox = h("div", {},
     h("div", { class: "field" }, h("label", {}, "Responses API 주소 (필수)"), url,
       h("small", {}, "필수 입력. POSTECH GenAI 콘솔에서 openai/responses로 끝나는 전체 HTTPS 주소를 복사하세요.")),
@@ -1689,7 +1717,11 @@ function showSkills() {
     if (!S.skills.length) list.append(h("p", { style: "color:var(--text-3)" }, "등록된 스킬이 없습니다."));
     for (const s of S.skills) {
       list.append(h("div", { class: "skill-item", title: s.path },
-        h("div", { class: "s-main" }, h("b", {}, "/" + s.name), h("span", { class: "badge" }, s.source), h("p", {}, s.description)),
+        h("div", { class: "s-main" }, h("b", {}, "/" + s.name), h("span", { class: "badge" }, s.source),
+          // 1.19.1: 플러그인 스킬은 플러그인 화면처럼 한국어 설명을 보이고 영문 원문은 접어 둔다
+          s.description_ko ? h("p", {}, s.description_ko) : h("p", {}, s.description),
+          s.description_ko && s.description ? h("details", { class: "plugin-orig" }, h("summary", {}, "영문 원문"),
+            h("p", { lang: "en" }, s.description)) : null),
         h("button", { class: "btn", onclick: () => { m.close(); $("#input").value = `/${s.name} `; updateSend(); $("#input").focus(); } }, "사용"),
       ));
     }
