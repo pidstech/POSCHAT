@@ -107,8 +107,21 @@ function sshReconnect() {
 async function sshBrowse(target, path) {
   const box = $("#ssh-browser");
   if (!box) return;
-  const r = await codeCall(api().code_ssh_browse(target, path));
-  if (!r) return;
+  let r;
+  try {
+    r = await api().code_ssh_browse(target, path);
+  } catch (e) {
+    r = { ok: false, error: e.message || String(e) };
+  }
+  if (!box.isConnected) return;
+  if (!r || r.ok === false) {
+    // 1.19.1: 연결 직후 목록을 못 받으면 빈 칸으로 두지 않고 이유와 '다시 시도'를 보인다
+    box.hidden = false;
+    box.replaceChildren(h("div", { class: "ssh-row" },
+      h("span", { class: "muted", style: "flex:1", role: "alert" }, `폴더 목록을 불러오지 못했습니다: ${(r && r.error) || "알 수 없는 오류"}`),
+      h("button", { class: "btn", type: "button", id: "ssh-browse-retry", onclick: () => sshBrowse(target, path) }, "다시 시도")));
+    return;
+  }
   const f = r.folder;
   SSH.folder = f;
   const where = h("input", { type: "text", class: "code-input", value: f.path, spellcheck: "false", autocomplete: "off",
