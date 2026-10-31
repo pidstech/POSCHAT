@@ -377,7 +377,15 @@ class CodeUiTests(unittest.TestCase):
                 page.fill("#ssh-field-0", "pw-1234")
                 page.fill("#ssh-field-1", "246810")
                 page.keyboard.press("Enter")
-                page.wait_for_selector("#ssh-browser .ssh-dir:has-text('chip')", timeout=20000)
+                try:
+                    page.wait_for_selector("#ssh-browser .ssh-dir:has-text('chip')", timeout=20000)
+                except Exception as e:  # CI에서 가끔 폴더 목록이 뜨지 않는다: 그때의 화면 상태를 함께 남긴다
+                    state = page.evaluate("""() => ({ target: SSH.target, states: SSH.states, modal: !!SSH.modal,
+                      status: document.querySelector('#ssh-status')?.textContent,
+                      browser: document.querySelector('#ssh-browser')?.outerHTML.slice(0, 500),
+                      toast: document.querySelector('#toast')?.textContent,
+                      modals: [...document.querySelectorAll('#modal-root .modal h2')].map((x) => x.textContent) })""")
+                    raise AssertionError(f"SSH 폴더 목록이 뜨지 않음: {state}; 화면 오류: {errors}") from e
                 self.assertIn("연결됨", page.inner_text("#ssh-status"))
                 self.shot(page, "code-ssh-browse")
                 page.click("#ssh-browser .ssh-dir:has-text('chip')")
