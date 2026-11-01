@@ -1,10 +1,52 @@
-# Microsoft Store 제출 (EXE 방식, 개인 계정)
+# Microsoft Store 제출 (MSIX 방식, 개인 계정)
 
-POSCHAT Windows 앱을 Microsoft Store에 **EXE 방식**으로 올리는 절차와 파트너 센터에 넣을 값입니다(2026-10 기준, 정책 v7.20).
+POSCHAT Windows 앱을 Microsoft Store에 **MSIX 방식**으로 올리는 절차와 파트너 센터에 넣을 값입니다(2026-11 기준).
+
+**왜 MSIX인가(2.0.1, 사용자 결정 2026-11-01)**: Chrome·SmartScreen은 서명 없는 낯선 exe를 받을 때 경고하거나 막습니다.
+Store에서 설치하면 브라우저로 exe를 받지 않으므로 이 경고가 아예 없습니다. EXE 방식은 설치 파일을 **직접 산 코드 서명 인증서로**
+서명해야 Store가 받지만, MSIX는 **Microsoft가 심사 뒤 자기 인증서로 다시 서명**하므로 인증서가 필요 없습니다.
+([코드 서명 선택지](https://learn.microsoft.com/windows/apps/package-and-deploy/code-signing-options))
+아래 EXE 방식 표는 인증서를 구하면 쓸 수 있도록 남겨 둡니다.
+
+## MSIX 패키지 (2.0.1)
+| 항목 | POSCHAT |
+|---|---|
+| 파일 | CI의 Windows 작업 산출물 **`POSCHAT-msix`** 안의 `POSCHAT.msix` (서명하지 않은 파일 — 릴리스에는 올리지 않음) |
+| 형식 | 전체 신뢰 데스크톱 앱(`runFullTrust`), x64, Windows 10 1809 이상, 마이크 권한(PO노트) |
+| 버전 | `version.py`의 X.Y.Z → `X.Y.Z.0` (Store는 마지막 자리가 0이어야 함) |
+| Store판 표시 | 패키지 안 `_internal/distribution.txt` = store → 앱이 스스로 업데이트하지 않음. **업데이트는 Store가 자동으로** 함 |
+| CI 확인 | 사본에 시험용 인증서로 서명해 실제로 설치 → `poschat.exe --selftest`가 패키지 안에서 Store판으로 도는지 확인 → 제거 |
+| 데이터 | MSIX 앱이 `%APPDATA%\PostechChat`에 새로 만드는 파일은 Windows가 패키지 전용 폴더로 돌립니다. 그래서 GitHub판과 대화·설정이 따로일 수 있고, Store판을 제거하면 그 데이터도 지워집니다 |
+
+### 직접 할 일 (MSIX)
+1. **개발자 계정(개인)** — https://storedeveloper.microsoft.com (등록비 없음). Microsoft 계정 로그인, 신분증·셀카로 본인 확인.
+   개인 계정은 나중에 회사 계정으로 바꿀 수 없습니다.
+2. **이름 예약** — 파트너 센터 → 앱 및 게임 → 새 제품 → **MSIX 또는 PWA 앱** → `POSCHAT` 예약.
+3. **제품 ID 값 세 개를 저장소 변수로** — 파트너 센터 → POSCHAT → *제품 관리 → 제품 ID*에 나오는 값을
+   GitHub 저장소 → Settings → Secrets and variables → Actions → **Variables**에 넣습니다(비밀 값이 아님).
+   | 변수 | 파트너 센터 항목 | 예 |
+   |---|---|---|
+   | `MSIX_IDENTITY_NAME` | Package/Identity/Name | `12345PIDSTech.POSCHAT` |
+   | `MSIX_PUBLISHER` | Package/Identity/Publisher | `CN=1A2B3C4D-...` |
+   | `MSIX_PUBLISHER_DISPLAY_NAME` | Package/Properties/PublisherDisplayName | `PIDS Tech.` |
+   같은 화면의 **Store ID(9N…)** 는 `updates.py`의 `STORE_PRODUCT_ID`에 넣습니다.
+   변수가 없으면 빌드는 시험용 게시자(`CN=POSCHAT Test`)로 만들고, 그 파일은 Store가 받지 않습니다(빌드 로그에 "시험용 게시자"라고 나옴).
+4. **빌드** — 변수를 넣은 뒤 Actions → *Build installer* → *Run workflow*(또는 다음 릴리스 태그). Windows 작업이 끝나면
+   실행 화면 아래 Artifacts에서 `POSCHAT-msix`를 받아 압축을 풉니다.
+5. **제출** — 파트너 센터 → 제출 → 패키지에 `POSCHAT.msix`를 올리고, 아래 *파트너 센터에 넣을 값*(속성·연령 등급·Store 목록·인증 참고 사항)을 채워
+   **인증을 위해 제출**. `runFullTrust`는 제한된 기능이라 사유를 묻습니다: *"Desktop app (Python/WebView2) that runs local tools,
+   a terminal and git for the user's own project folders."* 보통 1~3일.
+6. **공개 링크 바꾸기** — 심사가 끝나면 Windows 다운로드 링크를 `https://apps.microsoft.com/detail/<Store ID>`로 바꿉니다.
+
+### 업데이트할 때 (MSIX)
+평소처럼 릴리스 → 그 실행의 `POSCHAT-msix` 산출물을 파트너 센터 *업데이트* 제출에 올립니다. 버전은 이전보다 커야 합니다.
+Store판 사용자는 Store가 자동으로 업데이트합니다.
+
+## EXE 방식 (코드 서명 인증서가 있을 때)
 정책 원문: [Store 정책](https://learn.microsoft.com/windows/apps/publish/store-policies) ·
 [EXE/MSI 요구 사항](https://learn.microsoft.com/windows/apps/publish/publish-your-app/msi/app-package-requirements)
 
-## 앱이 이미 맞춘 것 (1.18)
+### 앱이 이미 맞춘 것 (EXE 방식, 1.18)
 | 요구(정책) | POSCHAT |
 |---|---|
 | 무인 설치(설치 화면 없이) | `POSCHAT-Store-Setup.exe --silent --no-desktop` (성공 0, 실패 1) |
@@ -19,7 +61,7 @@ POSCHAT Windows 앱을 Microsoft Store에 **EXE 방식**으로 올리는 절차�
 
 관리자 권한 없이 현재 사용자에게 설치합니다(`%LOCALAPPDATA%\Programs\PostechChat`). GitHub판과 같은 폴더·데이터를 쓰므로, 한 PC에 둘 중 하나만 설치됩니다(나중에 설치한 쪽으로 바뀜).
 
-## 직접 할 일 (순서대로)
+### 직접 할 일 (EXE 방식)
 1. **개발자 계정(개인)** — https://storedeveloper.microsoft.com 에서 시작(이 경로는 등록비 없음). Microsoft 계정으로 로그인, 신분증과 셀카로 본인 확인.
    개인 계정은 나중에 회사 계정으로 바꿀 수 없습니다. Store에 보이는 게시자 이름(예: 김범준 또는 PIDS Tech. 팀)을 정합니다.
 2. **이름 예약** — 파트너 센터 → 앱 및 게임 → 새 제품 → **EXE 또는 MSI 앱** → `POSCHAT` 가용성 확인 → 예약.
@@ -34,7 +76,7 @@ POSCHAT Windows 앱을 Microsoft Store에 **EXE 방식**으로 올리는 절차�
 
 ## 파트너 센터에 넣을 값
 
-### 패키지
+### 패키지 (EXE 방식만 — MSIX는 파일을 올림)
 | 항목 | 값 |
 |---|---|
 | 패키지 URL | `https://github.com/pidstech/POSCHAT/releases/download/vX.Y.Z/POSCHAT-Store-Setup.exe` (X.Y.Z는 서명된 릴리스) |
@@ -91,10 +133,10 @@ POSCHAT is an AI desktop app. To test without a POSTECH account:
 3. Code: click "코드" in the left sidebar, choose a folder as the workspace, type a task in the bottom ">" line.
 Generative AI: answers are generated live. Users can report inappropriate answers with the flag button under each answer;
 reports open a GitHub issue form (https://github.com/pidstech/POSCHAT/issues).
-The installer installs per-user (no admin) to %LOCALAPPDATA%\Programs\PostechChat. Silent install: --silent --no-desktop.
+The MSIX package is a full-trust desktop app (Python + WebView2); runFullTrust is needed to run the user's own tools (git, terminal) on folders they choose.
 ```
 
-## 업데이트할 때
+## 업데이트할 때 (EXE 방식)
 1. 평소처럼 릴리스(서명된 빌드)한다.
 2. 파트너 센터 → POSCHAT → **업데이트**에서 패키지 URL을 새 버전 주소로 바꾸고 제출한다. 이미 제출한 주소의 파일은 절대 바꾸지 않는다.
 3. Store판 사용자는 앱이 새 버전을 알리면 Microsoft Store에서 업데이트한다(심사가 끝나야 Store에 보임).
