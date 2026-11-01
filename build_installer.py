@@ -320,6 +320,27 @@ def msix_bad_names(layout):
     return bad
 
 
+def _msix_probe(layout):
+    import re
+    tool = sdk_tool("makeappx.exe")
+    base = [layout / "AppxManifest.xml", *sorted((layout / "Assets").iterdir()), layout / "PostechChat.exe"]
+    odd = [f for f in sorted(layout.rglob("*")) if f.is_file() and not re.fullmatch(r"[A-Za-z0-9._-]+", f.name)]
+    print(f"[진단] 특이한 이름 {len(odd)}개: " + ", ".join(f.relative_to(layout).as_posix() for f in odd[:40]))
+    groups = [("기본", [])] + [(f.relative_to(layout).as_posix(), [f]) for f in odd[:25]]
+    top = sorted({f.relative_to(layout).parts[1] for f in layout.rglob("*") if f.is_file() and f.relative_to(layout).parts[0] == "_internal" and len(f.relative_to(layout).parts) > 2})
+    groups += [(f"_internal/{t}/", [f for f in (layout / "_internal" / t).rglob("*") if f.is_file()]) for t in top]
+    for label, extra in groups:
+        probe = WORK / "probe"
+        if probe.exists():
+            shutil.rmtree(probe)
+        for f in base + extra:
+            dst = probe / f.relative_to(layout)
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(f, dst)
+        r = subprocess.run([tool, "pack", "/d", str(probe), "/p", str(WORK / "probe.msix"), "/o"], capture_output=True, text=True, errors="replace")
+        print(f"[진단] {label}: {'OK' if r.returncode == 0 else '실패'}")
+
+
 def build_msix(app_dir, target):
     identity = msix_identity()
     layout = msix_layout(app_dir, WORK / "msix", version.APP_VERSION, identity)
@@ -337,6 +358,7 @@ def build_msix(app_dir, target):
     if r.returncode != 0:   # makeappx는 실패 이유(매니페스트 오류·파일 이름 등)를 표준 출력에 쓴다
         out = [x for x in r.stdout.splitlines() if x.strip()]
         done = [x for x in out if x.startswith("Processing ")]
+        _msix_probe(layout)   # 임시 진단: 어떤 파일이 실패를 일으키는지 작은 패키지로 하나씩 시험
         sys.exit(f"makeappx 실패({r.returncode}, 파일 {len(done)}개 처리):\n"
                  + "\n".join(x for x in out if not x.startswith("Processing ")) + "\n마지막으로 처리한 파일:\n"
                  + "\n".join(done[-3:]) + f"\n{r.stderr[-2000:]}\n확장자: "
