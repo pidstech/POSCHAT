@@ -345,10 +345,16 @@ class AdaptiveEngine:
                   "task_label": router.TASK_LABELS.get(a.task, a.task), "difficulty_label": router.DIFF_LABELS.get(a.difficulty, ""),
                   "escalated": False, "api_call": False, "status": "", "est_cost": None}
         if manual_local:
+            # 2.0: 직접 고른 로컬 모델이 실패해 Cloud로 넘길 때도 개인정보 설정(민감 정보·첨부는 로컬만)을 지킨다.
+            # 라우터(router.route)를 거치지 않는 길이라 예전에는 이 설정을 보지 않고 Cloud로 보냈다
+            privacy_cfg = self.s.get("privacy") or {}
+            keep_local = bool((privacy_cfg.get("sensitive_local_only") and a.sensitive)
+                              or (privacy_cfg.get("attachments_to_cloud") is False and a.attachments))
+            cloud_ok = self.cloud_available and not keep_local
             route = router.Route(provider="local", model=manual_local, policy=self.s["policy"], reason_code="manual",
                                  reason="직접 고른 로컬 모델", analysis=a.__dict__, stage="manual",
-                                 escalation=bool(self.s.get("manual_fallback")) and self.cloud_available,
-                                 fallback_model=self.cloud_model if self.cloud_available else "")
+                                 escalation=bool(self.s.get("manual_fallback")) and cloud_ok,
+                                 fallback_model=self.cloud_model if cloud_ok else "")
         else:
             route = self._route(a, purpose)
         record.update(provider=route.provider, model=route.model, reason=route.reason, reason_code=route.reason_code,

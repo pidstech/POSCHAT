@@ -107,6 +107,11 @@ class PaperApi:
                     m = re.match(r"^https?://arxiv\.org/(?:abs|pdf)/(\d{4}\.\d{4,5})", text, re.I)
                     url = paper.ARXIV_PDF.format(m.group(1)) if m else text
                     name = f"arXiv-{m.group(1)}.pdf" if m else re.sub(r"[?#].*$", "", text).rstrip("/").rsplit("/", 1)[-1]
+                    if not m:
+                        # 2.0: 주소의 마지막 부분만 이름으로 쓰면 openreview.net/pdf?id=AAA와 ?id=BBB가 같은 pdf.pdf가 되어
+                        # 두 번째 논문을 열 때 첫 논문이 열렸다. 주소 전체의 해시를 붙인다
+                        import hashlib
+                        name = f"{name.removesuffix('.pdf')[:60]}-{hashlib.sha1(url.encode('utf-8')).hexdigest()[:8]}.pdf"
                 dest = paper.pdf_dir() / paper._safe_stem(name.removesuffix(".pdf"))
                 dest = dest.with_name(dest.name + ".pdf")
                 if not dest.is_file():

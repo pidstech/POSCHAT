@@ -29,7 +29,11 @@ CODE_BLOCK = re.compile(r"```([A-Za-z0-9_+\-]*)\n(.*?)```", re.S)
 AGENT_ACTIONS = {"list", "read", "search", "write", "edit", "run", "done", "recall", "skill", "mcp", "browser_read",
                  "browser_open", "browser_snapshot", "browser_click", "browser_type", "browser_select", "browser_scroll",
                  "browser_wait", "browser_extract", "browser_screenshot", "browser_back", "browser_forward", "browser_refresh",
-                 "paper_read", "plan"}
+                 "paper_read", "plan",
+                 # 2.0: 실제 도구(agent.Agent·code_agent.CodeAgent의 _tool_*)와 맞춘다 — 빠지면 맞는 단계도 실패로 보고 Cloud로 올렸다.
+                 # agent를 가져오면 순환 import라 목록으로 두고, 시험(test_code_hardening_2_0)이 _tool_* 전부가 들었는지 확인한다.
+                 "glob", "multi_edit", "job_output", "job_stop", "web_search", "web_fetch", "web_download", "paper_search",
+                 "plms_courses", "plms_course", "plms_read"}
 
 
 @dataclass

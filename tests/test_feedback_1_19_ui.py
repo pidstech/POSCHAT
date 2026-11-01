@@ -93,13 +93,13 @@ class FeedbackUiTests(unittest.TestCase):
                 self.assertIn("7,400", page.locator(".usage-chart figcaption").inner_text())
                 self.shot(page, "settings-top")
                 page.locator("#window-mode").scroll_into_view_if_needed()
-                self.assertEqual(page.input_value("#window-mode"), "fullscreen")  # 1.19.1 기본값
-                page.select_option("#window-mode", "maximized")
+                self.assertEqual(page.input_value("#window-mode"), "maximized")  # 2.0 기본값
+                page.select_option("#window-mode", "normal")
                 self.shot(page, "settings-window-mode")
                 page.click(".modal-foot button:has-text('저장')")
                 page.wait_for_selector("#modal-root .modal", state="detached")
-                self.assertEqual(self.bridge._config["window_mode"], "maximized")
-                self.assertEqual(self.bridge.get_state()["config"]["window_mode"], "maximized")
+                self.assertEqual(self.bridge._config["window_mode"], "normal")
+                self.assertEqual(self.bridge.get_state()["config"]["window_mode"], "normal")
                 # 가이드: 큰 제목과 목차, 목차를 누르면 그 항목이 펼쳐진다
                 page.click("#btn-settings")
                 page.click(".guide-card")

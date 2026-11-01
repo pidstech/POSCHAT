@@ -292,6 +292,8 @@ function groupLabel(ts) {
 
 function renderSidebar() {
   const list = $("#thread-list");
+  // 2.0: 이름을 고치는 중이면 다시 그리지 않는다(입력 칸이 사라짐). 끝나면 startRename이 다시 그린다
+  if (list.querySelector("input.thread-rename:not([data-done])")) return;
   const keep = list.scrollTop;  // 목록을 다시 그려도 보던 자리를 지킨다
   list.innerHTML = "";
   let last = null;
@@ -320,8 +322,10 @@ function renderSidebar() {
 }
 
 function startRename(item, t) {
-  const input = h("input", { value: t.title });
+  const input = h("input", { value: t.title, class: "thread-rename", "aria-label": "대화 이름" });
   const done = async (save) => {
+    if (input.dataset.done) return;   // 2.0: Enter 뒤 blur로 두 번 불리지 않게
+    input.dataset.done = "1";
     if (save && input.value.trim() && input.value.trim() !== t.title) {
       S.threads = await api().rename_thread(t.id, input.value.trim());
       if (t.id === S.currentId) {
@@ -974,6 +978,7 @@ window.onBackendEvent = (ev) => {
       if (window.adaptiveDone) adaptiveDone();
       endStreaming();
       $("#typing")?.remove();
+      renderThreadModel();   // 2.0: 답이 끝나면 대화별 모델 선택을 다시 켠다
     }
     if (ev.workspace) S.workspace = ev.workspace;
     updateSend();
@@ -1144,7 +1149,13 @@ function modal({ title, body, buttons = [], wide = false, onClose }) {
     onClose && onClose(value);
     if (opener && opener.isConnected && typeof opener.focus === "function" && !$("#modal-root .modal")) opener.focus();
   };
-  const onKey = (e) => { if (e.key === "Escape") close(null); };
+  // 2.0: 창이 겹치면 맨 위 창만 Escape로 닫는다(아래 설정 창의 입력이 날아가지 않게)
+  const onKey = (e) => {
+    if (e.key !== "Escape" || e.isComposing || !backdrop.isConnected || root.lastElementChild !== backdrop) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    close(null);
+  };
   const foot = h("div", { class: "modal-foot" },
     buttons.map((b) => h("button", { class: "btn " + (b.class || ""), onclick: () => (b.action ? b.action(close) : close(b.value)) }, b.label)));
   const titleId = `modal-title-${++modal.count}`;
@@ -1383,9 +1394,9 @@ function showSettings() {
   // 1.19: 앱을 열 때의 창 크기. 다음 실행부터 적용된다(지금 창은 F11로 전체 화면을 켜고 끌 수 있다).
   const windowMode = h("select", { id: "window-mode" },
     h("option", { value: "normal" }, "기본 창"),
-    h("option", { value: "maximized" }, "최대화"),
-    h("option", { value: "fullscreen" }, "전체 화면"));
-  windowMode.value = c.window_mode || "fullscreen";  // 1.19.1 기본값: 전체 화면
+    h("option", { value: "maximized" }, "최대화 (권장)"),
+    h("option", { value: "fullscreen" }, "전체 화면 (제목 표시줄 숨김)"));
+  windowMode.value = c.window_mode || "maximized";  // 2.0 기본값: 최대화(최소화·최대화·닫기 버튼이 보인다)
   const responsesBox = h("div", {},
     h("div", { class: "field" }, h("label", {}, "Responses API 주소 (필수)"), url,
       h("small", {}, "필수 입력. POSTECH GenAI 콘솔에서 openai/responses로 끝나는 전체 HTTPS 주소를 복사하세요.")),
@@ -1455,7 +1466,7 @@ function showSettings() {
         ? h("label", { style: "display:flex;align-items:center;font-size:13px;margin-top:4px;cursor:pointer" }, clearPlms, "저장된 계정 지우기")
         : null),
     h("div", { class: "field" }, h("label", { for: "window-mode" }, "시작할 때 창 크기"), windowMode,
-      h("small", {}, "다음에 앱을 열 때부터 이 크기로 엽니다. 지금 창은 F11로 전체 화면을 켜고 끌 수 있습니다.")),
+      h("small", {}, "다음에 앱을 열 때부터 이 크기로 엽니다. 전체 화면에서는 창의 최소화·최대화·닫기 버튼이 숨으니 F11로 끄세요. 지금 창도 F11로 전체 화면을 켜고 끌 수 있습니다.")),
     h("div", { class: "field" }, h("label", {}, "업데이트"),
       h("label", { style: "display:flex;align-items:center;font-weight:400;cursor:pointer" }, autoUpdate, "시작할 때 새 버전 확인"),
       h("div", { class: "row", style: "margin-top:6px" },
@@ -1769,7 +1780,7 @@ const GUIDE = [
 
 새 대화는 왼쪽 위 **새 채팅**(Ctrl+Shift+O, 맥은 ⌘+Shift+O)으로 만들고, 대화 목록에 마우스를 올리면 이름 바꾸기·삭제 아이콘이 나옵니다.
 
-앱을 열 때 창 크기는 **설정 → 시작할 때 창 크기**(기본 창·최대화·전체 화면)에서 정합니다. 지금 창은 **F11**로 전체 화면을 켜고 끕니다.`],
+앱을 열 때 창 크기는 **설정 → 시작할 때 창 크기**(기본 창·최대화·전체 화면)에서 정합니다. 기본값은 **최대화**로, 화면을 채우면서 창의 최소화·최대화·닫기 버튼이 보입니다. 지금 창은 **F11**로 전체 화면을 켜고 끕니다(전체 화면에서는 그 버튼들이 숨습니다).`],
   ["모델과 API 방식", `
 **설정 → API 방식**에서 고릅니다.
 

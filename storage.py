@@ -50,9 +50,22 @@ def ensure_dirs():
 
 
 def _write_json(path, data):
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
+    # 2.0: 임시 파일 이름을 쓰기마다 다르게(동기화·채팅 스레드가 같은 파일을 동시에 써도 서로의 .tmp를 덮지 않게) 하고,
+    # 바꾸기 전에 디스크에 내려 둔다(정전 뒤 config.json·대화가 0바이트로 남지 않게)
+    text = json.dumps(data, ensure_ascii=False, indent=2)
+    tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex[:8]}.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 # 1.18.9: API 키·토큰은 config.json(평문, 백업에 복사됨)이 아니라 비밀 저장소(secret_store: OS 키체인, 안 되면 0600 파일)에 둔다.
@@ -63,20 +76,36 @@ CONFIG_SECRET_KEYS = ("api_key", "anthropic_api_key", "openai_api_key", "notion_
 CONFIG_SECRETS_NAME = "config:secrets"
 
 
-def _load_config_secrets():
+# 2.0: 시작할 때 비밀 저장소를 읽지 못했다는 표시(설정 dict 안에만 있고 config.json에는 쓰지 않는다).
+# 이 표시가 있는 동안 save_config는 저장된 키를 지우지 않는다(macOS 업데이트 뒤 키체인 접근을 한 번 거부했다가
+# 다음 저장 때 허용하면, 비어 보이던 설정으로 키 다섯 개를 모두 지우던 문제).
+SECRETS_UNREADABLE = "_secrets_unreadable"
+
+
+def _load_config_secrets(strict=False):
     import secret_store
 
-    data = secret_store.get_json(CONFIG_SECRETS_NAME)
+    data = secret_store.get_json(CONFIG_SECRETS_NAME, strict=strict)
     return {k: str(v) for k, v in data.items() if k in CONFIG_SECRET_KEYS and v} if isinstance(data, dict) else {}
 
 
 def load_config():
+    import secret_store
+
     cfg = dict(DEFAULT_CONFIG)
     try:
-        cfg.update(json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
-    except (FileNotFoundError, json.JSONDecodeError):
+        raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        if isinstance(raw, dict):  # 손으로 고쳐 []·null이 된 파일이면 기본값으로 연다(앱이 아예 안 열리지 않게)
+            cfg.update(raw)
+    except (OSError, ValueError):
         pass
-    for key, value in _load_config_secrets().items():
+    cfg.pop(SECRETS_UNREADABLE, None)
+    try:
+        secrets = _load_config_secrets(strict=True)
+    except secret_store.SecretStoreError:
+        secrets = {}
+        cfg[SECRETS_UNREADABLE] = True
+    for key, value in secrets.items():
         if not cfg.get(key):   # 파일에 평문 값이 남아 있으면(옮기기 전) 그 값을 쓴다
             cfg[key] = value
     return cfg
@@ -86,15 +115,28 @@ def save_config(cfg):
     import secret_store
 
     data = dict(cfg)
+    unreadable = bool(data.pop(SECRETS_UNREADABLE, False))
     secrets = {}
     for key in CONFIG_SECRET_KEYS:
         value = str(data.pop(key, "") or "")
         if value:
             secrets[key] = value
-    if _load_config_secrets() != secrets:   # 바뀌었을 때만 쓴다(모두 비면 지운다)
+    try:
+        stored = _load_config_secrets(strict=True)
+    except secret_store.SecretStoreError:
+        stored = None  # 지금도 읽지 못한다: 비교할 수 없으니 지우지 않는다
+    if unreadable and stored is not None:
+        # 시작 때 못 읽은 키를 이제 읽었다: 저장된 키에 이번에 입력한 키만 덮어쓰고, 설정 dict에도 되살린다
+        secrets = {**stored, **secrets}
+        for key, value in secrets.items():
+            if not cfg.get(key):
+                cfg[key] = value
+        cfg.pop(SECRETS_UNREADABLE, None)
+        unreadable = False
+    if stored != secrets:   # 바뀌었을 때만 쓴다(모두 비면 지운다)
         if secrets:
             secret_store.set_json(CONFIG_SECRETS_NAME, secrets)
-        else:
+        elif stored and not unreadable:
             secret_store.delete(CONFIG_SECRETS_NAME)
     _write_json(CONFIG_PATH, data)
     try:

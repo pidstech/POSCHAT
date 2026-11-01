@@ -999,6 +999,7 @@ def _events(response):
 def _read_stream(response, on_delta, cancelled):
     """(답변 텍스트, 토큰 사용량 또는 None)."""
     text, final, usage = "", None, None
+    saw_delta = False
     try:
         for event, data in _events(response):
             if cancelled and cancelled():
@@ -1008,6 +1009,7 @@ def _read_stream(response, on_delta, cancelled):
                 break
             if kind == "delta":
                 text += value
+                saw_delta = True
             elif kind == "chunk":
                 # 형식이 문서에 없는 a1 스트림: 지금까지의 전체 텍스트를 다시 보내는 방식이면 바꾸고, 조각이면 잇는다.
                 text = value if text and value.startswith(text) else text + value
@@ -1022,7 +1024,8 @@ def _read_stream(response, on_delta, cancelled):
     finally:
         response.close()
     result = final if final else text
-    if result.lstrip().startswith("{"):
+    # 2.0: 정식 조각(delta)·최종 답(final)을 받았으면 그 글이 답이다. 모델이 JSON 예시를 답하면 한 필드("OK")로 바뀌던 문제
+    if not saw_delta and not final and result.lstrip().startswith("{"):
         # 형식 표시 없이 JSON 응답 하나를 통째로 보낸 경우({"message": ...})
         try:
             result = _response_text(json.loads(result)) or result

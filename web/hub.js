@@ -6,7 +6,7 @@
    app.js의 h(), modal(), api(), toast(), renderMarkdown(), copyText()를 쓴다.
    1.11: 연구 라이브러리와 에이전트 자동화는 창의 탭 대신 PO노트처럼 사이드바에서 여는 본문 화면(#tool-view)이다. */
 
-const HUB = { tab: "connectors", modal: null, panel: null, tabs: null, open: new Set() };
+const HUB = { tab: "connectors", modal: null, panel: null, tabs: null, open: new Set(), seq: 0 };
 const HUB_TABS = [];  // [{ id, label, render(panel) }] — 아래에서 차례로 더한다
 
 const CONN_STATE = {
@@ -52,10 +52,17 @@ function renderHub() {
   }, t.label)));
   const tab = HUB_TABS.find((t) => t.id === HUB.tab);
   // 같은 탭을 다시 그릴 때는 새 내용이 올 때까지 이전 내용을 둔다(깜빡임·스크롤 위치 튐 방지)
-  if (HUB.rendered !== tab.id) fill(HUB.panel, h("small", { class: "muted" }, "불러오는 중..."));
+  // 2.0: 다른 탭으로 옮기면 패널을 새로 만든다. 늦게 끝난 이전 탭의 그리기는 떼어 낸 옛 패널에만 쓴다
+  if (HUB.rendered !== tab.id) {
+    const panel = h("div", { class: "hub-panel" }, h("small", { class: "muted" }, "불러오는 중..."));
+    HUB.panel.replaceWith(panel);
+    HUB.panel = panel;
+  }
   HUB.rendered = tab.id;
-  Promise.resolve(tab.render(HUB.panel)).catch((e) => {
-    fill(HUB.panel, h("p", { class: "mcp-error" }, `불러오지 못했습니다: ${e.message || e}`));
+  const seq = ++HUB.seq, panel = HUB.panel;
+  Promise.resolve(tab.render(panel)).catch((e) => {
+    if (seq !== HUB.seq || panel !== HUB.panel) return;   // 2.0: 그 사이 다른 그리기가 시작됐으면 오류도 보이지 않는다
+    fill(panel, h("p", { class: "mcp-error" }, `불러오지 못했습니다: ${e.message || e}`));
   });
 }
 

@@ -488,6 +488,25 @@ def _existing_pdf(path):
     return p
 
 
+def _get_public(url, hops=5):
+    """2.0: 리디렉션을 한 번씩 따라가며 주소마다 공개 주소인지 확인한다(내부망·이 PC의 서비스로 보내지 않는다)."""
+    import web_research
+    from urllib.parse import urljoin
+
+    for _ in range(hops + 1):
+        try:
+            url = web_research.check_url(url)
+        except web_research.WebError as e:
+            raise ToolFailure(str(e))
+        r = http("GET", url, timeout=60, stream=True, allow_redirects=False)
+        if r.status_code in (301, 302, 303, 307, 308) and r.headers.get("Location"):
+            url = urljoin(url, r.headers["Location"])
+            r.close()
+            continue
+        return r
+    raise ToolFailure("리디렉션이 너무 많아 PDF를 받지 않았습니다.")
+
+
 def _fetch_pdf(kind, value):
     """PDF 파일 경로. 작업 폴더의 파일이면 그대로, 인터넷이면 임시 폴더에 받아 둔 것을 쓴다."""
     if kind == "file":
@@ -499,7 +518,7 @@ def _fetch_pdf(kind, value):
     cached = CACHE_DIR / (hashlib.sha1(url.encode()).hexdigest()[:16] + ".pdf")
     if cached.is_file() and cached.stat().st_size > 0:
         return cached
-    r = http("GET", url, timeout=60, stream=True, allow_redirects=True)
+    r = _get_public(url)
     if r.status_code != 200:
         raise ToolFailure(f"PDF를 받지 못했습니다(HTTP {r.status_code}): {url}")
     data = bytearray()

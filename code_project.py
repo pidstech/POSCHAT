@@ -16,6 +16,7 @@ import shlex
 import subprocess
 from pathlib import Path
 
+import code_git
 from remote_fs import remote_ok
 
 INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md", ".claude/CLAUDE.md")
@@ -25,6 +26,8 @@ MAX_RULES = 50
 # 단일 &도 sh(백그라운드 뒤 다음 명령)와 cmd(명령 연결) 모두에서 두 번째 명령을 실행한다.
 CHAIN_RE = re.compile(r"[;&|`<>^\n\r]|\$\(" + (r"|%[^%\s]+%" if os.name == "nt" else ""))   # %변수%는 cmd에서만 펼쳐진다
 _FLAGS = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+# 2.0: 저장소의 훅(.git/hooks의 post-checkout·post-commit 등)을 돌리지 않는다 — 없는 폴더를 훅 폴더로(승인 없이 프로그램이 돌지 않게)
+NO_HOOKS = ["-c", "core.hooksPath=" + os.devnull]
 
 
 class ProjectError(Exception):
@@ -104,17 +107,21 @@ def detect_commands(root):
 
 
 @remote_ok
-def git(root, *args, timeout=30, check=True, input_bytes=None):
+def git(root, *args, timeout=30, check=True, input_bytes=None, raw=False):
+    """git을 code_git과 같은 안전 설정으로 부른다. raw=True면 출력을 바이트 그대로(패치·-z 목록)."""
+    # 2.0: 저장소 설정이 프로그램을 실행하는 길(core.fsmonitor, 저장소 안의 filter·textconv·gpg)을 code_git처럼 끈다.
+    # 전에는 맨 git이라 .git/config의 core.fsmonitor가 에이전트 탭을 여는 것만으로(git status) 실행됐다.
     try:
-        r = subprocess.run(["git", *args], cwd=str(root), capture_output=True, timeout=timeout, creationflags=_FLAGS,
+        r = subprocess.run(["git", *code_git.SAFE_CONFIG, *code_git._local_overrides(root), *args], cwd=str(root),
+                           capture_output=True, timeout=timeout, creationflags=_FLAGS,
                            input=input_bytes, stdin=None if input_bytes is not None else subprocess.DEVNULL,
-                           env=dict(os.environ, GIT_TERMINAL_PROMPT="0", LC_ALL="C"))
+                           env=code_git._env())
     except (OSError, subprocess.SubprocessError) as e:
         raise ProjectError(f"git을 실행하지 못했습니다: {e}")
-    out = r.stdout.decode("utf-8", errors="replace")
     if check and r.returncode != 0:
-        raise ProjectError((r.stderr.decode("utf-8", errors="replace").strip() or out.strip() or "git 오류")[:500])
-    return out
+        raise ProjectError((r.stderr.decode("utf-8", errors="replace").strip()
+                            or r.stdout.decode("utf-8", errors="replace").strip() or "git 오류")[:500])
+    return r.stdout if raw else r.stdout.decode("utf-8", errors="replace")
 
 
 @remote_ok
@@ -374,9 +381,9 @@ def memory_add(root, text):
 def review_diff(root, limit=60000):
     """커밋하지 않은 변경(스테이지 포함)과 새 파일 목록."""
     try:
-        diff = git(root, "diff", "HEAD", "--no-color", "--no-ext-diff", timeout=30, check=False)
+        diff = git(root, "diff", "HEAD", "--no-color", "--no-ext-diff", "--no-textconv", timeout=30, check=False)
         if not diff.strip():
-            diff = git(root, "diff", "--no-color", "--no-ext-diff", timeout=30, check=False)
+            diff = git(root, "diff", "--no-color", "--no-ext-diff", "--no-textconv", timeout=30, check=False)
         new = git(root, "ls-files", "--others", "--exclude-standard", timeout=10, check=False).split()
     except ProjectError:
         return ""
@@ -463,42 +470,161 @@ def worktree_create(root, path, branch):
     if not re.fullmatch(r"[0-9a-f]{40}", head):
         raise ProjectError("격리 작업은 커밋이 하나 이상 있는 저장소에서만 할 수 있습니다.")
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    git(root, "worktree", "add", "-b", branch, str(path), head, timeout=120)
+    git(root, *NO_HOOKS, "worktree", "add", "-b", branch, str(path), head, timeout=120)   # 2.0: post-checkout 훅을 돌리지 않는다
     return head
 
 
 @remote_ok
+def repo_prefix(root):
+    """2.0: 작업 폴더가 저장소 맨 위에서 얼마나 아래인지('sub/dir/', 맨 위면 ''). 격리 작업의 에이전트를 worktree의 같은 하위 폴더에 둔다."""
+    return git(root, "rev-parse", "--show-prefix", timeout=5).strip()
+
+
+@remote_ok
 def worktree_patch(path, base):
-    """worktree의 모든 변경(새 파일 포함)을 base 기준 바이너리 패치로. 인덱스만 건드린다(작업 파일은 그대로)."""
+    """worktree의 모든 변경(새 파일 포함)을 base 기준 바이너리 패치(bytes)로. 인덱스만 건드린다(작업 파일은 그대로).
+    2.0: 바이트 그대로 돌려준다 — utf-8로 풀었다 다시 묶으면 CP949 같은 내용이 깨졌다. textconv도 쓰지 않는다."""
     git(path, "add", "-A", timeout=60)
-    return git(path, "diff", "--cached", "--binary", "--no-color", "--no-ext-diff", base, timeout=60)
+    return git(path, "diff", "--cached", "--binary", "--no-color", "--no-ext-diff", "--no-textconv", base, timeout=60, raw=True)
+
+
+def _as_bytes(patch):
+    return patch if isinstance(patch, (bytes, bytearray)) else str(patch or "").encode("utf-8")
+
+
+def _c_unquote(name):
+    """git의 따옴표 경로(예: "\\355\\225\\234.txt" — 8진수 이스케이프)를 바이트로 푼다."""
+    if not (len(name) >= 2 and name[:1] == b'"' and name[-1:] == b'"'):
+        return name
+    out, i, body = bytearray(), 0, name[1:-1]
+    esc = {ord("n"): 10, ord("t"): 9, ord("r"): 13, ord("a"): 7, ord("b"): 8, ord("f"): 12, ord("v"): 11}
+    while i < len(body):
+        c = body[i]
+        if c == 0x5c and i + 1 < len(body):
+            n = body[i + 1]
+            if 0x30 <= n <= 0x37 and i + 4 <= len(body):
+                out.append(int(body[i + 1:i + 4], 8) & 0xFF)
+                i += 4
+                continue
+            out.append(esc.get(n, n))
+            i += 2
+            continue
+        out.append(c)
+        i += 1
+    return bytes(out)
+
+
+def _path_text(raw):
+    return raw.decode("utf-8", errors="surrogateescape")
 
 
 def patch_files(patch):
-    """패치가 건드리는 경로(이름 바꾸기는 앞뒤 둘 다)."""
+    """패치가 건드리는 경로(이름 바꾸기는 앞뒤 둘 다). 2.0: bytes도 받고, git의 따옴표 경로(한글 등)도 푼다."""
+    data = _as_bytes(patch)
     out = []
-    for a, b in re.findall(r"(?m)^diff --git a/(.+?) b/(.+)$", patch):
-        for f in (a, b):
+    for line in data.splitlines():
+        if not line.startswith(b"diff --git "):
+            continue
+        rest = line[len(b"diff --git "):]
+        m = re.match(rb'^("(?:[^"\\]|\\.)*"|a/.+?) ("(?:[^"\\]|\\.)*"|b/.+)$', rest)
+        if not m:
+            continue
+        for raw in m.groups():
+            raw = _c_unquote(raw)
+            f = _path_text(raw[2:] if raw[:2] in (b"a/", b"b/") else raw)
             if f not in out:
                 out.append(f)
     return out
 
 
-@remote_ok
-def worktree_apply(root, patch):
-    """패치를 원래 작업 폴더에 적용한다. 먼저 검사하고, 안 맞으면 3-way로 합쳐 본다. 3-way에서 겹치면(충돌 표시가 남으면)
-    건드린 파일과 인덱스를 적용 전으로 되돌리고 오류 — 원래 폴더는 언제나 '다 적용' 아니면 '그대로'다."""
-    if not patch.strip():
-        return {"applied": False, "files": [], "message": "적용할 변경이 없습니다."}
-    data = patch.encode("utf-8")
-    files = patch_files(patch)
+def _numstat_files(top, data):
+    """2.0: git이 직접 읽은 패치의 경로 목록(apply --numstat -z, 이름 바꾸기는 앞뒤 둘 다). 못 읽으면 None."""
     try:
-        git(root, "apply", "--check", "--whitespace=nowarn", "-", input_bytes=data, timeout=60)
-        git(root, "apply", "--whitespace=nowarn", "-", input_bytes=data, timeout=60)
-        return {"applied": True, "files": files, "three_way": False}
+        raw = git(top, "apply", "--numstat", "-z", "-", input_bytes=data, timeout=60, raw=True)
+    except ProjectError:
+        return None
+    out, parts, i = [], raw.split(b"\0"), 0
+    while i < len(parts):
+        rec = parts[i]
+        if not rec:
+            i += 1
+            continue
+        fields = rec.split(b"\t", 2)
+        names = []
+        if len(fields) == 3 and fields[2]:
+            names = [fields[2]]
+            i += 1
+        elif len(fields) == 3:   # 이름 바꾸기: "추가\t삭제\t\0옛 이름\0새 이름\0"
+            names = parts[i + 1:i + 3]
+            i += 3
+        else:
+            i += 1
+        for n in names:
+            f = _path_text(n)
+            if f and f not in out:
+                out.append(f)
+    return out
+
+
+def _same_content(a, b):
+    try:
+        x, y = a.read_bytes(), b.read_bytes()
+    except OSError:
+        return False
+    return x == y or x.replace(b"\r\n", b"\n") == y.replace(b"\r\n", b"\n")
+
+
+def _verify_applied(top, worktree, files, three_way):
+    """2.0: 적용한 뒤 패치의 경로가 정말 원래 폴더에 반영됐는지 worktree와 견준다(있음·없음, 3-way가 아니면 내용까지).
+    다른 경로 목록을 돌려준다(비면 모두 반영)."""
+    if not worktree:
+        return []
+    bad = []
+    for f in files:
+        a, b = Path(top) / f, Path(worktree) / f
+        if a.exists() != b.exists() or a.is_file() != b.is_file():
+            bad.append(f)
+        elif b.is_file() and not three_way and not _same_content(a, b):
+            bad.append(f)
+    return bad
+
+
+@remote_ok
+def worktree_apply(root, patch, worktree=None):
+    """패치를 원래 작업 폴더에 적용한다. 먼저 검사하고, 안 맞으면 3-way로 합쳐 본다. 3-way에서 겹치면(충돌 표시가 남으면)
+    건드린 파일과 인덱스를 적용 전으로 되돌리고 오류 — 원래 폴더는 언제나 '다 적용' 아니면 '그대로'다.
+    2.0: 패치는 bytes 그대로 쓴다. 저장소 맨 위에서 적용한다(하위 폴더에서 git apply는 그 밖 경로를 말없이 건너뛰고도 성공이라
+    했다). 작업 폴더 밖 경로가 있으면 적용하지 않는다. worktree를 주면 적용 뒤 견줘 verified(모두 반영)를 알린다 —
+    부르는 쪽은 verified일 때만 worktree·브랜치를 지운다."""
+    data = _as_bytes(patch)
+    if not data.strip():
+        return {"applied": False, "files": [], "message": "적용할 변경이 없습니다."}
+    top = git(root, "rev-parse", "--show-toplevel", timeout=10).strip()
+    prefix = git(root, "rev-parse", "--show-prefix", timeout=10).strip()
+    files = _numstat_files(top, data)
+    if files is None:
+        files = patch_files(data)
+    outside = [f for f in files if prefix and not f.startswith(prefix)]
+    if outside:
+        raise ProjectError("격리 작업이 작업 폴더 밖 파일도 바꿔 적용하지 않았습니다(원래 폴더는 그대로): "
+                           + ", ".join(outside[:10]) + (" 외" if len(outside) > 10 else "")
+                           + ". '브랜치로 남기기'로 커밋해 두고 Git으로 합칠 수 있습니다.")
+
+    def done(three_way):
+        bad = _verify_applied(top, worktree, files, three_way)
+        out = {"applied": True, "files": files, "three_way": three_way, "verified": not bad}
+        if bad:
+            out["mismatch"] = bad
+            out["message"] = ("적용했지만 일부 파일이 격리 작업 공간과 달라 격리 공간과 브랜치를 남겼습니다: " + ", ".join(bad[:10]))
+        return out
+
+    try:
+        git(top, "apply", "--check", "--whitespace=nowarn", "-", input_bytes=data, timeout=60)
+        git(top, "apply", "--whitespace=nowarn", "-", input_bytes=data, timeout=60)
+        return done(False)
     except ProjectError:
         pass
-    root_p = Path(root)
+    root_p = Path(top)
     saved = {}
     for f in files:
         p = root_p / f
@@ -506,16 +632,16 @@ def worktree_apply(root, patch):
             saved[f] = p.read_bytes() if p.is_file() else None
         except OSError:
             saved[f] = None
-    index = git(root, "ls-files", "-s", "--", *files, check=False, timeout=30) if files else ""
+    index = git(top, "ls-files", "-s", "-z", "--", *files, check=False, timeout=30, raw=True) if files else b""
     try:
-        git(root, "apply", "--3way", "--whitespace=nowarn", "-", input_bytes=data, timeout=60)
-        return {"applied": True, "files": files, "three_way": True}
+        git(top, "apply", "--3way", "--whitespace=nowarn", "-", input_bytes=data, timeout=60)
+        return done(True)
     except ProjectError as e:
         # 충돌 표시·인덱스 충돌 단계가 남았을 수 있다: 적용 전으로 되돌린다
         if files:
-            git(root, "rm", "--cached", "-q", "--ignore-unmatch", "--", *files, check=False, timeout=30)
-            if index.strip():
-                git(root, "update-index", "--index-info", input_bytes=index.encode("utf-8"), check=False, timeout=30)
+            git(top, "rm", "--cached", "-q", "--ignore-unmatch", "--", *files, check=False, timeout=30)
+            if index.strip(b"\0"):
+                git(top, "update-index", "-z", "--index-info", input_bytes=index, check=False, timeout=30)
         for f, raw in saved.items():
             p = root_p / f
             try:
@@ -540,7 +666,7 @@ def worktree_commit(path, message):
     ident = []
     if not git(path, "config", "user.email", check=False, timeout=10).strip():
         ident = ["-c", "user.name=POSCHAT Code 에이전트", "-c", "user.email=poschat-agent@localhost"]
-    git(path, *ident, "commit", "-q", "--no-verify", "-m", message, timeout=60)
+    git(path, *NO_HOOKS, *ident, "commit", "-q", "--no-verify", "-m", message, timeout=60)   # 2.0: post-commit 훅도 돌리지 않는다
     return True
 
 

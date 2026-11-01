@@ -211,7 +211,7 @@ function codeLeave() {
 async function codeRefreshState() {
   const st = await codeCall(api().code_state());
   if (!st) return;
-  const changed = CODE.state && CODE.state.workspace.path !== st.workspace.path;
+  const changed = CODE.state && codeWsKey(CODE.state) !== codeWsKey(st);   // 2.0: 같은 경로라도 SSH 대상이 바뀌면 다른 작업 폴더
   CODE.state = st;
   CODE.runs = st.runs || [];
   const remote = st.remote;
@@ -224,11 +224,14 @@ async function codeRefreshState() {
   $("#code-ssh").classList.toggle("active", !!remote);
   if (CODE.side !== "files" && !codeFeature(CODE.side)) CODE.side = "files";
   if (changed) {
-    if (CODE.tabs.some((t) => t.kind === "file" && t.editor.isDirty())) {
-      toast("작업 폴더가 바뀌었습니다. 저장하지 않은 탭은 그대로 둡니다(예전 폴더의 파일)");
-    } else {
-      for (const t of [...CODE.tabs]) if (t.kind !== "agent") codeCloseTab(t, true);
+    // 2.0: 저장하지 않은 파일 탭만 남긴다(그 탭은 예전 폴더에 묶여 저장·다시 열기를 막는다)
+    const keep = CODE.tabs.some((t) => t.kind === "file" && t.editor.isDirty() && !codeTabHere(t));
+    for (const t of [...CODE.tabs]) {
+      if (t.kind === "agent" || (t.kind === "file" && t.editor.isDirty())) continue;
+      codeCloseTab(t, true);
     }
+    if (keep) toast("작업 폴더가 바뀌었습니다. 저장하지 않은 탭은 그대로 둡니다(예전 폴더의 파일, 저장하려면 그 폴더로 돌아가세요)");
+    codeRenderNotice();
     if (window.caRefresh) caRefresh();
     CODE.tree.clear();
     CODE.expanded = new Set([""]);
@@ -240,6 +243,29 @@ async function codeRefreshState() {
   $("#code-pane").classList.toggle("bottom-closed", !CODE.bottomOpen);
   if (CODE.bottomOpen && CODE.open && window.termEnsure && (codeWsReady() || !st.remote)) termEnsure();
   codeRenderTabs();
+}
+
+/* 2.0: 작업 폴더 식별자(로컬 경로, 원격이면 SSH 대상+경로). 탭은 연 때의 값을 들고 있다 */
+function codeWsKey(st = CODE.state) {
+  if (!st) return "";
+  return st.remote ? `ssh:${st.remote.target}:${st.workspace.path}` : `local:${st.workspace.path}`;
+}
+
+function codeWsLabel(st = CODE.state) {
+  if (!st) return "";
+  return st.remote ? `SSH ${st.remote.label}` : st.workspace.path;
+}
+
+/* 2.0: 탭이 지금 작업 폴더의 파일인지(작업 폴더가 바뀐 뒤 남긴 탭이면 false) */
+function codeTabHere(t) {
+  return !t.ws || t.ws === codeWsKey();
+}
+
+/* 2.0: 다른 작업 폴더의 탭이면 알리고 true. 저장·다시 열기가 새 폴더의 같은 경로를 덮지 않게 */
+function codeTabElsewhere(t, what = "저장") {
+  if (codeTabHere(t)) return false;
+  toast(`이 탭은 다른 작업 폴더(${t.wsLabel || "예전 폴더"})의 파일입니다. ${what}하려면 그 폴더로 돌아가세요`);
+  return true;
 }
 
 /* ---------- 파일 트리 ---------- */
@@ -430,7 +456,7 @@ async function codeRename(it) {
   if (!name || name === it.path) return;
   const res = await codeCall(api().code_rename(it.path, name));
   if (!res) return;
-  for (const t of CODE.tabs) if (t.kind === "file" && t.path === it.path) { t.path = res.renamed.path; t.title = codeBase(t.path); }
+  for (const t of CODE.tabs) if (t.kind === "file" && t.path === it.path && codeTabHere(t)) { t.path = res.renamed.path; t.title = codeBase(t.path); }
   await codeLoadDir(codeDir(it.path));
   if (codeDir(res.renamed.path) !== codeDir(it.path)) await codeLoadDir(codeDir(res.renamed.path));
   codeRenderTabs();
@@ -443,7 +469,7 @@ async function codeDelete(it) {
   if (!ok) return;
   const res = await codeCall(api().code_delete(it.path));
   if (!res) return;
-  for (const t of [...CODE.tabs]) if (t.kind === "file" && t.path === it.path) codeCloseTab(t, true);
+  for (const t of [...CODE.tabs]) if (t.kind === "file" && t.path === it.path && codeTabHere(t)) codeCloseTab(t, true);
   await codeLoadDir(codeDir(it.path));
   toast(res.deleted.trash ? "휴지통으로 옮겼습니다" : "지웠습니다");
 }
@@ -488,7 +514,7 @@ function codeNewTab(t) {
 
 async function codeOpenFile(path, line, col) {
   if (!CODE.open) await codeShow();
-  const existing = CODE.tabs.find((t) => t.kind === "file" && t.path === path);
+  const existing = CODE.tabs.find((t) => t.kind === "file" && t.path === path && codeTabHere(t));
   if (existing) {
     codeActivate(existing.id);
     if (line) existing.editor.gotoLine(line, col);
@@ -498,7 +524,8 @@ async function codeOpenFile(path, line, col) {
   if (!res) return null;
   const f = res.file;
   if (f.binary) { toast(f.reason); return null; }
-  const t = codeNewTab({ kind: "file", path: f.path, title: f.name, file: f });
+  const t = codeNewTab({ kind: "file", path: f.path, title: f.name, file: f,
+    ws: codeWsKey(), wsLabel: codeWsLabel(), wsPath: CODE.state ? CODE.state.workspace.path : "" });  // 2.0: 연 작업 폴더를 기억
   t.editor = codeEditorTab(t.el, f.text, f.language, f.readonly, (ed) => codeOnChange(t), () => codeSave(t));
   if (isNarrow() && CODE.filesOpen) codeToggleFiles(false);
   codeActivate(t.id);
@@ -581,7 +608,7 @@ async function codeCloseTab(t, force = false) {
   }
   if (t.editor) t.editor.destroy();
   t.el.remove();
-  if (t.kind === "file") codeDraftDrop(t.path);
+  if (t.kind === "file") codeDraftDrop(t.path, t.wsPath);   // 2.0: 탭을 연 폴더의 임시 보관을 지운다
   const i = CODE.tabs.indexOf(t);
   CODE.tabs.splice(i, 1);
   if (CODE.active === t.id) CODE.active = CODE.tabs.length ? CODE.tabs[Math.max(0, i - 1)].id : null;
@@ -623,6 +650,7 @@ function codeRenderNotice() {
   if (!box) return;
   const parts = [];
   if (t && t.kind === "file") {
+    if (!codeTabHere(t)) parts.push(h("span", { class: "code-elsewhere" }, `이 탭은 다른 작업 폴더(${t.wsLabel || "예전 폴더"})의 파일입니다. 저장하려면 그 폴더로 돌아가세요. `));  // 2.0
     if (t.file.reason) parts.push(h("span", {}, t.file.reason));
     if (t.file.mixed_newlines) parts.push(h("span", {}, "이 파일은 줄 끝(LF·CRLF)이 섞여 있습니다. 저장하면 많은 쪽으로 맞춥니다."));
     if (t.diskChanged) {
@@ -658,6 +686,7 @@ function codeRenderStatus() {
 }
 
 async function codeSave(t, opts = {}) {
+  if (codeTabElsewhere(t, "저장")) return false;
   if (t.file.readonly) { toast("읽기 전용 파일입니다"); return false; }
   const text = t.editor.getText();
   const res = await codeCall(api().code_save(t.path, text, t.file.hash, opts.encoding || t.file.encoding, t.file.newline, !!opts.force));
@@ -688,6 +717,7 @@ async function codeSave(t, opts = {}) {
 }
 
 async function codeReload(t, force = false) {
+  if (codeTabElsewhere(t, "다시 열려면")) return;
   if (!force && t.editor.isDirty()) {
     const ok = await codeChoose("다시 열기", h("p", {}, "저장하지 않은 내 변경이 사라집니다. 다시 열까요?"),
       [{ label: "취소", value: false }, { label: "다시 열기", class: "danger", value: true }]);
@@ -707,7 +737,7 @@ async function codeReload(t, force = false) {
 /* 창으로 돌아올 때 열린 파일이 디스크에서 바뀌었는지 본다 */
 async function codeCheckDisk() {
   for (const t of CODE.tabs) {
-    if (t.kind !== "file") continue;
+    if (t.kind !== "file" || !codeTabHere(t)) continue;   // 2.0: 다른 작업 폴더의 탭은 새 폴더 파일과 비교하지 않는다
     const res = await codeCall(api().code_hash(t.path), true);
     if (!res || res.hash === t.file.hash) continue;
     if (!t.editor.isDirty() && res.hash !== "absent") await codeReload(t, true);
@@ -725,7 +755,7 @@ function codeDrafts() {
 function codeDraftSave(t) {
   if (t.kind !== "file") return;
   const all = codeDrafts();
-  const key = (CODE.state ? CODE.state.workspace.path : "") + "|" + t.path;
+  const key = (t.wsPath != null ? t.wsPath : CODE.state ? CODE.state.workspace.path : "") + "|" + t.path;  // 2.0: 탭을 연 폴더 기준
   if (!t.editor.isDirty()) delete all[key];
   else {
     const text = t.editor.getText();
@@ -735,9 +765,9 @@ function codeDraftSave(t) {
   try { localStorage.setItem(CODE_DRAFTS, JSON.stringify(all)); } catch { /* 저장소가 가득 참 */ }
 }
 
-function codeDraftDrop(path) {
+function codeDraftDrop(path, wsPath) {
   const all = codeDrafts();
-  delete all[(CODE.state ? CODE.state.workspace.path : "") + "|" + path];
+  delete all[(wsPath != null ? wsPath : CODE.state ? CODE.state.workspace.path : "") + "|" + path];
   try { localStorage.setItem(CODE_DRAFTS, JSON.stringify(all)); } catch { /* 무시 */ }
 }
 
@@ -988,7 +1018,7 @@ async function codeAfterReview(t, proposal) {
   await codeOpenReview(proposal.id);
   codeRenderReviewList();
   codeRenderReviewBadge();
-  const ft = CODE.tabs.find((x) => x.kind === "file" && x.path === proposal.path);
+  const ft = CODE.tabs.find((x) => x.kind === "file" && x.path === proposal.path && codeTabHere(x));
   if (ft && !ft.editor.isDirty()) await codeReload(ft, true);
   else if (ft) { ft.diskChanged = true; codeRenderNotice(); }
   codeGitRefresh(true);
@@ -1155,7 +1185,7 @@ function codeEvent(ev) {
       toast(`에이전트가 ${ev.proposal.path}을(를) 고치려고 합니다. 덩어리를 골라 적용하세요`);
     }
   } else if (ev.kind === "file_changed") {
-    const t = CODE.tabs.find((x) => x.kind === "file" && x.path === ev.path);
+    const t = CODE.tabs.find((x) => x.kind === "file" && x.path === ev.path && codeTabHere(x));
     if (t && t.file.hash !== ev.hash && ev.by !== "editor") {
       if (!t.editor.isDirty()) codeReload(t, true);
       else { t.diskChanged = true; codeRenderNotice(); }
