@@ -293,6 +293,10 @@ def msix_layout(app_dir, layout, app_version, identity):
     if layout.exists():
         shutil.rmtree(layout)
     shutil.copytree(app_dir, layout)
+    # python-docx의 풀어 둔 서식 원본(default.docx를 만들 때 쓴 것, 실행 중에는 읽지 않음)에는 OPC 예약 이름(_rels/.rels,
+    # [Content_Types].xml)이 있어 makeappx가 0x8007007b로 실패한다. 앱이 쓰는 default.docx는 그대로 둔다.
+    for name in MSIX_DROP:
+        shutil.rmtree(layout / name, ignore_errors=True)
     # Store판: 스스로 업데이트 파일을 받지 않고 Store로 안내한다(version.distribution). MSIX는 Store가 업데이트한다.
     (layout / "_internal" / version.DISTRIBUTION_FILE).write_text("store\n", encoding="utf-8")
     assets = layout / "Assets"
@@ -305,8 +309,10 @@ def msix_layout(app_dir, layout, app_version, identity):
     return layout
 
 
-# MSIX 패키지 안 파일 이름 규칙: Windows 예약 장치 이름(확장자가 붙어도), 금지 문자, 끝의 점·공백은 넣을 수 없다.
+# MSIX 패키지 안 파일 이름 규칙: Windows 예약 장치 이름(확장자가 붙어도), 금지 문자, 끝의 점·공백, 패키지 형식(OPC)이
+# 쓰는 예약 이름(_rels 폴더, [Content_Types].xml)은 넣을 수 없다.
 MSIX_RESERVED = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(10)), *(f"lpt{i}" for i in range(10))}
+MSIX_DROP = ["_internal/docx/templates/default-docx-template"]
 
 
 def msix_bad_names(layout):
@@ -315,30 +321,10 @@ def msix_bad_names(layout):
     for f in sorted(Path(layout).rglob("*")):
         name = f.name
         if (name.split(".")[0].lower() in MSIX_RESERVED or name.endswith((".", " "))
+                or name.lower() in ("_rels", "[content_types].xml")
                 or any(c in name for c in '<>:"|?*%') or any(ord(c) < 32 for c in name)):
             bad.append(f.relative_to(layout).as_posix())
     return bad
-
-
-def _msix_probe(layout):
-    import re
-    tool = sdk_tool("makeappx.exe")
-    base = [layout / "AppxManifest.xml", *sorted((layout / "Assets").iterdir()), layout / "PostechChat.exe"]
-    odd = [f for f in sorted(layout.rglob("*")) if f.is_file() and not re.fullmatch(r"[A-Za-z0-9._-]+", f.name)]
-    print(f"[진단] 특이한 이름 {len(odd)}개: " + ", ".join(f.relative_to(layout).as_posix() for f in odd[:40]))
-    groups = [("기본", [])] + [(f.relative_to(layout).as_posix(), [f]) for f in odd[:25]]
-    top = sorted({f.relative_to(layout).parts[1] for f in layout.rglob("*") if f.is_file() and f.relative_to(layout).parts[0] == "_internal" and len(f.relative_to(layout).parts) > 2})
-    groups += [(f"_internal/{t}/", [f for f in (layout / "_internal" / t).rglob("*") if f.is_file()]) for t in top]
-    for label, extra in groups:
-        probe = WORK / "probe"
-        if probe.exists():
-            shutil.rmtree(probe)
-        for f in base + extra:
-            dst = probe / f.relative_to(layout)
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(f, dst)
-        r = subprocess.run([tool, "pack", "/d", str(probe), "/p", str(WORK / "probe.msix"), "/o"], capture_output=True, text=True, errors="replace")
-        print(f"[진단] {label}: {'OK' if r.returncode == 0 else '실패'}")
 
 
 def build_msix(app_dir, target):
@@ -358,7 +344,6 @@ def build_msix(app_dir, target):
     if r.returncode != 0:   # makeappx는 실패 이유(매니페스트 오류·파일 이름 등)를 표준 출력에 쓴다
         out = [x for x in r.stdout.splitlines() if x.strip()]
         done = [x for x in out if x.startswith("Processing ")]
-        _msix_probe(layout)   # 임시 진단: 어떤 파일이 실패를 일으키는지 작은 패키지로 하나씩 시험
         sys.exit(f"makeappx 실패({r.returncode}, 파일 {len(done)}개 처리):\n"
                  + "\n".join(x for x in out if not x.startswith("Processing ")) + "\n마지막으로 처리한 파일:\n"
                  + "\n".join(done[-3:]) + f"\n{r.stderr[-2000:]}\n확장자: "

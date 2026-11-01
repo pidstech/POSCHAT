@@ -133,9 +133,18 @@ class MsixTests(unittest.TestCase):
             app = Path(d, "app")
             (app / "_internal").mkdir(parents=True)
             (app / "PostechChat.exe").write_bytes(b"MZ")
+            tpl = app / "_internal" / "docx" / "templates"
+            (tpl / "default-docx-template" / "_rels").mkdir(parents=True)
+            (tpl / "default-docx-template" / "_rels" / ".rels").write_text("<x/>", encoding="utf-8")
+            (tpl / "default.docx").write_bytes(b"PK")
             layout = build_installer.msix_layout(app, Path(d, "msix"), "2.0.1", build_installer.msix_identity())
             self.assertEqual((layout / "_internal" / "distribution.txt").read_text(encoding="utf-8"), "store\n")
             self.assertFalse((app / "_internal" / "distribution.txt").exists())   # GitHub판 폴더는 그대로
+            # makeappx가 거절하는 OPC 예약 이름(python-docx의 풀어 둔 서식 원본)은 빼고, 앱이 쓰는 default.docx는 남긴다
+            self.assertFalse((layout / "_internal/docx/templates/default-docx-template").exists())
+            self.assertTrue((layout / "_internal/docx/templates/default.docx").is_file())
+            self.assertEqual(build_installer.msix_bad_names(layout), [])
+            self.assertEqual(build_installer.msix_bad_names(app), ["_internal/docx/templates/default-docx-template/_rels"])
             text = (layout / "AppxManifest.xml").read_text(encoding="utf-8")
             for ref in ("Assets\\StoreLogo.png", "Assets\\Square44x44Logo.png", "Assets\\Square150x150Logo.png"):
                 self.assertIn(ref, text)
