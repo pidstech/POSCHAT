@@ -74,18 +74,28 @@ def _write_file(data):
         pass
 
 
-def get(name):
-    """저장된 값. 없으면 ""."""
+class SecretStoreError(Exception):
+    """OS 보안 저장소를 읽지 못했다(잠김·접근 거부). '저장된 값 없음'과 다르다."""
+
+
+def get(name, strict=False):
+    """저장된 값. 없으면 "".
+    strict=True(2.0): 키체인을 읽지 못했고 파일에도 없으면 ""가 아니라 SecretStoreError를 낸다.
+    '없음'으로 여기고 저장하면 키체인에 있던 값을 지워 버리기 때문이다(storage.save_config)."""
     kr = _keyring_module()
+    failed = False
     if kr:
         try:
             value = kr.get_password(SERVICE, name)
             if value is not None:
                 return value
         except Exception:
-            pass  # 키체인이 잠겼거나 접근 거부: 파일 쪽도 본다
+            failed = True  # 키체인이 잠겼거나 접근 거부: 파일 쪽도 본다
     with _lock:
-        return str(_read_file().get(name) or "")
+        value = str(_read_file().get(name) or "")
+    if failed and strict and not value:
+        raise SecretStoreError(name)
+    return value
 
 
 def set(name, value):  # noqa: A001 — 모듈 함수 이름(secret_store.set)으로만 쓴다
@@ -127,8 +137,8 @@ def has(name):
     return bool(get(name))
 
 
-def get_json(name):
-    raw = get(name)
+def get_json(name, strict=False):
+    raw = get(name, strict=strict)
     if not raw:
         return None
     try:

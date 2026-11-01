@@ -484,7 +484,9 @@ def delete_to_trash(workspace, rel, trash_dir):
         return {"path": clean, "trash": ""}
     if not trash_dir:   # 원격(SSH) 작업 폴더: 서버의 ~/.cache/poschat/trash
         trash_dir = os.path.join(os.path.expanduser("~"), ".cache", "poschat", "trash")
-    dest = Path(trash_dir) / time.strftime("%Y%m%d-%H%M%S") / clean
+    # 2.0: 초 단위 시각만으로 이름을 지으면 같은 초에 같은 경로를 두 번 지울 때 앞의 것을 덮어쓴다 — 폴더를 새로 만들어 겹치지 않게
+    Path(trash_dir).mkdir(parents=True, exist_ok=True)
+    dest = Path(tempfile.mkdtemp(prefix=time.strftime("%Y%m%d-%H%M%S") + "-", dir=str(trash_dir))) / clean
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(path), str(dest))
     return {"path": clean, "trash": str(dest)}

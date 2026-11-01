@@ -46,7 +46,9 @@ from version import APP_VERSION
 APP_TITLE = "POSCHAT"
 UPDATE_INTERVAL = 6 * 3600  # 시작할 때 새 버전을 확인하는 최소 간격(초)
 WINDOW_MODES = ("normal", "maximized", "fullscreen")  # 1.19 설정: 앱을 열 때의 창 크기
-DEFAULT_WINDOW_MODE = "fullscreen"  # 1.19.1: 처음부터 전체 화면으로 연다(F11로 끈다)
+# 2.0: 처음에는 최대화로 연다. 1.19.1의 기본값(전체 화면)은 창의 제목 표시줄(최소화·최대화·닫기 버튼)까지 숨겨
+# 창을 줄이거나 닫을 방법이 F11뿐이었다. 최대화는 화면을 채우면서 그 버튼을 그대로 둔다.
+DEFAULT_WINDOW_MODE = "maximized"
 UPDATE_EXIT_TIMEOUT = 15  # 업데이트하려고 창을 닫은 뒤 정리가 끝나지 않아도 이 시간(초)이 지나면 프로세스를 끝낸다
 PO_RESERVES = (0, 10, 20, 30, 50)  # PO노트 크레딧 예산 보호: 이번 주 한도의 몇 %를 남겨 둘지(0은 끄기)
 
@@ -121,6 +123,12 @@ class Bridge(WorkspaceApi, BrowserApi, PaperApi, CodeApi, CodeAgentApi, SshApi, 
             # 그 값은 한 번 지워 새 기본값을 따르게 한다(최대화·전체 화면을 고른 값은 그대로 둔다)
             self._config.pop("window_mode", None)
             self._config["window_mode_191"] = True
+            storage.save_config(self._config)
+        if self._config.get("window_mode") == "fullscreen" and not self._config.get("window_mode_200"):
+            # 2.0: 1.19.x는 설정을 저장할 때마다 고르지 않은 창 크기(1.19.1 기본값 '전체 화면')도 함께 저장했다.
+            # 직접 고른 값과 구별할 수 없으므로 한 번 지워 새 기본값(최대화, 제목 표시줄 있음)을 따르게 한다
+            self._config.pop("window_mode", None)
+            self._config["window_mode_200"] = True
             storage.save_config(self._config)
         if "github_update_token" in self._config:  # 1.8.0의 업데이트 확인용 GitHub 토큰은 더 쓰지 않는다
             self._config.pop("github_update_token", None)
@@ -515,9 +523,12 @@ class Bridge(WorkspaceApi, BrowserApi, PaperApi, CodeApi, CodeAgentApi, SshApi, 
                 self._config["update_check"] = bool(settings["update_check"])
             if "developer_mode" in settings:  # 1.17: 라우팅·토큰·손익분기의 원자료를 화면에 보인다
                 self._config["developer_mode"] = bool(settings["developer_mode"])
-            if settings.get("window_mode") in WINDOW_MODES:  # 1.19: 다음에 앱을 열 때의 창 크기
-                self._config["window_mode"] = settings["window_mode"]
-                self._config["window_mode_191"] = True  # 1.19.1 이후에 고른 '기본 창'은 그대로 둔다
+            mode = settings.get("window_mode")
+            if mode in WINDOW_MODES and mode != self._window_mode():  # 1.19: 다음에 앱을 열 때의 창 크기
+                # 2.0: 바꾼 때만 저장한다. 설정 창은 이 칸을 늘 함께 보내므로, 고르지 않은 값까지 적어 두면
+                # 기본값을 바꿔도 따라가지 않는다(1.19.x에서 '전체 화면'이 그렇게 남았다)
+                self._config["window_mode"] = mode
+                self._config["window_mode_191"] = self._config["window_mode_200"] = True
             self._stamp_settings(before)
             storage.save_config(self._config)
         return self.get_state()
@@ -601,12 +612,47 @@ class Bridge(WorkspaceApi, BrowserApi, PaperApi, CodeApi, CodeAgentApi, SshApi, 
         mode = self._config.get("window_mode")
         return mode if mode in WINDOW_MODES else DEFAULT_WINDOW_MODE
 
+    def _track_window(self, window, mode):
+        """2.0: 창이 최대화돼 있는지와 전체 화면인지를 기억한다(F11로 전체 화면을 끌 때 돌아갈 모양)."""
+        self._window = window
+        self._fullscreen_lock = threading.Lock()  # F11 연타 순서만 지킨다(_lock은 잡지 않는다: UI 스레드 Invoke를 기다리므로)
+        self._fullscreen = mode == "fullscreen"
+        self._maximized = mode == "maximized"
+        self._maximized_before_fullscreen = mode != "normal"  # 전체 화면으로 시작했으면 끌 때 최대화로 돌아간다
+
+        def on_maximized():
+            self._maximized = True
+
+        def on_restored():
+            self._maximized = False
+        try:
+            window.events.maximized += on_maximized
+            window.events.restored += on_restored
+        except Exception:
+            pass  # 이벤트가 없는 pywebview: 시작할 때의 모양만 기억한다
+
     def toggle_fullscreen(self):
-        """F11: 전체 화면을 켜고 끈다(1.19). 설정의 '시작할 때 창 크기'는 바꾸지 않는다."""
+        """F11: 전체 화면을 켜고 끈다(1.19). 설정의 '시작할 때 창 크기'는 바꾸지 않는다.
+        2.0: 전체 화면에서는 제목 표시줄(최소화·최대화·닫기)이 없으므로, 끌 때 최대화돼 있던 창은 최대화로 되돌린다
+        (pywebview는 전체 화면을 끄면 늘 '기본 창'으로 돌아가 화면 크기만 한 테두리 없는 창처럼 보였다)."""
         window = getattr(self, "_window", None)
-        if window is not None:
-            window.toggle_fullscreen()
-        return {"ok": True}
+        lock = getattr(self, "_fullscreen_lock", None)
+        if window is None or lock is None:
+            return {"ok": True}
+        with lock:
+            if not getattr(self, "_fullscreen", False):
+                self._maximized_before_fullscreen = bool(getattr(self, "_maximized", False))
+                window.toggle_fullscreen()
+                self._fullscreen = True
+            else:
+                window.toggle_fullscreen()
+                self._fullscreen = False
+                if getattr(self, "_maximized_before_fullscreen", False):
+                    try:
+                        window.maximize()
+                    except Exception:
+                        pass
+        return {"ok": True, "fullscreen": self._fullscreen}
 
     def open_folder(self, which):
         targets = {
@@ -1672,7 +1718,7 @@ def run_app():
         width=width, height=height, min_size=(760, 520), text_select=True,
         maximized=mode == "maximized", fullscreen=mode == "fullscreen",
     )
-    bridge._window = window
+    bridge._track_window(window, mode)
     try:
         webview.start(debug=os.environ.get("POSTECH_CHAT_DEBUG") == "1")
     finally:

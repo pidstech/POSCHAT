@@ -254,7 +254,15 @@ def index_file(path, collection, title=None, library_id=None, vectors=None):
             rows.append((cur.lastrowid, did, collection, text))
         con.commit()
     if vectors is not None:
-        vectors.replace_document(did, rows)
+        try:
+            vectors.replace_document(did, rows)
+        except Exception as e:
+            # 2.0: 벡터 저장소·임베딩 API가 잠깐 안 되면 해시를 지워 다음 인덱싱 때 다시 넣는다. 예전에는 해시가 남아
+            # '바뀌지 않음'으로 건너뛰어 그 문서가 벡터 검색에 영영 들어가지 않았고, 폴더 인덱싱도 그 자리에서 멈췄다
+            with _db() as con:
+                con.execute("UPDATE documents SET sha256='' WHERE doc_id=?", (did,))
+                con.commit()
+            raise RagError(f"벡터 저장에 실패했습니다(글자 검색은 됩니다): {type(e).__name__}: {e}") from e
     return "indexed", len(chunks)
 
 
@@ -305,10 +313,17 @@ def index_folder(root, collection, paths=None, on_progress=None, vectors=None, m
 
 
 def _walk(root, skip):
+    top = Path(root).resolve()
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = sorted(d for d in dirnames if d not in skip and not d.startswith("."))
         for name in sorted(filenames):
-            yield Path(dirpath) / name
+            p = Path(dirpath) / name
+            if p.is_symlink():  # 2.0: 폴더 밖을 가리키는 파일 링크는 인덱싱하지 않는다(비밀 파일이 검색에 들어가지 않게)
+                try:
+                    p.resolve().relative_to(top)
+                except (OSError, ValueError):
+                    continue
+            yield p
 
 
 # ---- 검색 ----

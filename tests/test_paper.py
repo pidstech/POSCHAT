@@ -210,7 +210,11 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(len(calls), 1)  # 같은 논문은 다시 받지 않는다
             res = self.bridge.paper_open({"url": "https://example.org/files/paper.pdf?x=1"})
             self.assertTrue(res["ok"], res)
-            self.assertEqual(Path(res["doc"]["path"]).name, "paper.pdf")
+            self.assertRegex(Path(res["doc"]["path"]).name, r"^paper-[0-9a-f]{8}\.pdf$")
+            # 2.0: 이름이 같고 주소가 다른 PDF(openreview.net/pdf?id=AAA·BBB)는 따로 받는다
+            first = res["doc"]["path"]
+            res = self.bridge.paper_open({"url": "https://example.org/files/paper.pdf?x=2"})
+            self.assertNotEqual(res["doc"]["path"], first)
 
     def test_library_paper_downloads_arxiv_once_and_records_path(self):
         p, _ = research_library.add({"title": "Attention", "arxiv": "1706.03762"})

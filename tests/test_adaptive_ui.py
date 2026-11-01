@@ -127,7 +127,8 @@ class AdaptiveUiTests(unittest.TestCase):
                 self.shot(page, "adaptive-policy")
                 dlg.locator(".modal-foot button:has-text('저장')").click()
                 page.wait_for_selector("#toast:has-text('AI 실행 정책을 저장했습니다')")
-                page.keyboard.press("Escape")  # 설정 창 닫기
+                while page.locator("#modal-root .modal").count():  # 2.0: Escape는 맨 위 창 하나만 닫는다
+                    page.keyboard.press("Escape")  # 설정 창(그리고 그 사이 뜬 창) 닫기
                 # 새 대화는 '자동', 목록에 로컬 모델
                 page.click("#btn-new") if page.locator("#btn-new").count() else page.keyboard.press("Control+Shift+O")
                 page.wait_for_function("() => [...document.querySelectorAll('#thread-model option')].some(o => o.value === 'local:qwen2.5:7b')")

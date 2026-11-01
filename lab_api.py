@@ -30,6 +30,7 @@ import code_workspace as cw
 import connectors
 import lab_results
 import lab_store
+import remote_fs
 import storage
 
 KINDS = ("command", "python", "notebook")
@@ -296,6 +297,19 @@ class LabApi:
     def _lab_ready(self):
         lab_store.recover_once()
 
+    def _lab_ws(self):
+        """2.0: Lab은 이 PC에서만 실행한다(ssh_api: 'Lab의 작업 폴더는 그대로 로컬'). Code 화면이 원격(SSH) 폴더를 열었어도
+        로컬 작업 폴더를 쓰고, 로컬 폴더가 없으면 원격 경로로 로컬 명령을 만들지 않고 거절한다."""
+        if self._code_android():
+            raise code_runner.RunnerError("안드로이드에서는 명령을 실행할 수 없습니다(PC 앱에서 쓰세요).")
+        ws = self._workspace()
+        if ws and not remote_fs.is_remote(ws):
+            return ws
+        if getattr(self, "_code_remote", lambda: None)():
+            raise code_runner.RunnerError("Lab은 이 PC에서만 실행합니다. 지금은 원격(SSH) 작업 폴더만 열려 있어 실행할 수 없습니다. "
+                                          "사이드바 아래의 '작업 폴더'에서 이 PC의 폴더를 고르세요.")
+        raise cw.WorkspaceError("작업 폴더가 지정되지 않았습니다. 사이드바 아래의 '작업 폴더'에서 폴더를 고르세요.")
+
     def _lab_python(self):
         import runner_mcp
 
@@ -423,7 +437,7 @@ class LabApi:
     def lab_run_check(self, experiment_id, spec):
         """승인 창에 보일 정보와 한 번 쓰는 승인 토큰. 실제 명령(파라미터를 넣은 것)의 SHA-256에 묶인다."""
         def go():
-            ws = self._code_run_ready()
+            ws = self._lab_ws()
             exp, s = self._lab_spec(experiment_id, spec)
             if s.get("kind") == "notebook" and not (self.lab_env().get("notebook")):
                 raise lab_store.LabError("이 PC의 Python에 Jupyter(nbconvert)가 없습니다. 설치한 뒤 다시 시도하세요"
@@ -446,7 +460,7 @@ class LabApi:
 
     def lab_run_start(self, experiment_id, spec, token, name="", notes=""):
         def go():
-            ws = self._code_run_ready()
+            ws = self._lab_ws()
             exp, s = self._lab_spec(experiment_id, spec)
             preview, _ = build_command({**s, "_out_dir": "<Lab 기록 폴더>"} if s.get("kind") == "notebook" else s,
                                        self._lab_python())

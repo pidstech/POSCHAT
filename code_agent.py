@@ -32,7 +32,7 @@ import documents
 import mcp_client
 import remote_fs
 import storage
-from agent import ACTION_DOCS, MAX_READ_CHARS, Agent, ToolError, _truncate
+from agent import ACTION_DOCS, AUTO_RUN_FILES, MAX_READ_CHARS, Agent, ToolError, _truncate
 from code_workspace import atomic_write
 
 MAX_TASKS = 100
@@ -40,12 +40,14 @@ MAX_STEPS_KEPT = 400
 MAX_DETAIL = 12000
 # 권한 모드(1.17.1, Claude Code의 권한 모드·Codex의 승인 방식): 계획(읽기만) · 매번 묻기 · 수정 자동(기본) · 전체 자동
 APPROVALS = ("plan", "ask", "auto_edit", "full_auto")
-# '수정 자동'이어도 승인 창으로 묻는 파일: 다음 git commit·편집기 열기·셸 진입 때 저절로 프로그램을 실행하게 하는 설정.
-# (.git 안은 에이전트가 아예 고치지 않는다 — agent._in_git_dir)
-AUTO_RUN_FILES = re.compile(
-    r"(?i)(^|/)(\.husky/|\.githooks/|\.pre-commit-config\.ya?ml$|\.pre-commit-hooks\.ya?ml$|lefthook(-local)?\.ya?ml$|"
-    r"\.lefthook(-local)?\.ya?ml$|\.envrc$|\.vscode/(tasks|settings|launch)\.json$|\.idea/|\.devcontainer/|"
-    r"\.gitattributes$|\.gitmodules$)")
+# '수정 자동'이어도 묻는 설정 파일(AUTO_RUN_FILES)은 2.0부터 agent.py에 있다(채팅 에이전트도 쓴다)
+# 2.0: '다시 묻지 않기' 규칙이 실제로 무엇을 실행할지 정하는 파일(npm test → package.json scripts, make test → Makefile 등).
+# 이 작업이 이런 파일을 고친 뒤에는 기억한 규칙으로 묻지 않고 실행하지 않는다(고친 스크립트가 승인 없이 돌지 않게).
+COMMAND_DEF_FILES = re.compile(
+    r"(?i)(^|/)(package\.json|(gnu)?makefile|[^/]*\.mk|pyproject\.toml|setup\.cfg|setup\.py|tox\.ini|noxfile\.py|conftest\.py|"
+    r"pytest\.ini|justfile|\.justfile|taskfile(\.dist)?\.ya?ml|cargo\.toml|build\.rs|build\.gradle(\.kts)?|settings\.gradle(\.kts)?|"
+    r"gradlew(\.bat)?|pom\.xml|cmakelists\.txt|[^/]*\.cmake|rakefile|gemfile|composer\.json|deno\.jsonc?|bunfig\.toml|"
+    r"\.npmrc|\.yarnrc(\.yml)?|sitecustomize\.py|usercustomize\.py|[^/]*\.pth|manage\.py)$")
 PLAN_DOC = '{"action": "plan", "steps": ["할 일 1", "할 일 2"], "done": [0]}  할 일 목록 쓰기·갱신(done: 끝낸 항목 번호, 0부터)'
 CODE_RULES = """[코딩 에이전트 지침 — Codex·Claude Code처럼 일하세요]
 - 여러 단계가 필요한 작업이면 먼저 plan으로 할 일 목록(3~7개)을 쓰고, 하나씩 끝낼 때마다 plan의 done을 갱신하세요.
@@ -212,6 +214,7 @@ class CodeAgent(Agent):
         self.project_note = project_note
         self.jobs = []            # 백그라운드 명령(RunRecord)
         self.current_tool = None  # 지금 실행 중인 단계 {"name", "arg"} — 화면의 단계 표시용(1.17.2)
+        self.command_files = set()  # 2.0: 이번 지시에서 고치려 한 COMMAND_DEF_FILES(있으면 기억한 규칙으로 자동 실행하지 않는다)
 
     def _static_prompt(self, history, task, forced_skill):
         text = super()._static_prompt(history, task, forced_skill)
@@ -271,8 +274,8 @@ class CodeAgent(Agent):
 
     def _confirm_download(self, rel, url, size):
         self._read_only("파일을 받")
-        if self.mode in ("auto_edit", "full_auto"):   # 수정 자동: 새 파일 받기는 묻지 않는다(작업 폴더 안, 덮어쓰지 않음)
-            return True
+        if self.mode in ("auto_edit", "full_auto") and not AUTO_RUN_FILES.search(str(rel).replace("\\", "/")):
+            return True  # 수정 자동: 새 파일 받기는 묻지 않는다(작업 폴더 안, 덮어쓰지 않음). 저절로 실행되는 설정 파일은 묻는다(2.0)
         return super()._confirm_download(rel, url, size)
 
     def _check_text_target(self, p):
@@ -351,6 +354,15 @@ class CodeAgent(Agent):
 
     # ---- 고치기 ----
 
+    def _save(self, p, old_text, new_text, enc, title, reason=""):
+        try:
+            rel = str(self._rel(p)).replace("\\", "/")
+        except Exception:
+            rel = str(p).replace("\\", "/")
+        if COMMAND_DEF_FILES.search(rel):
+            self.command_files.add(rel)   # 2.0: 저장 전에 남긴다(승인·거부와 관계없이 보수적으로)
+        return super()._save(p, old_text, new_text, enc, title, reason)
+
     def _tool_edit(self, path, old, new, reason="", replace_all=False):
         if not replace_all:
             return super()._tool_edit(path, old, new, reason)
@@ -402,9 +414,14 @@ class CodeAgent(Agent):
         if not command:
             raise ToolError("command가 비었습니다.")
         info = code_runner.analyze(command)
-        auto = (self.mode == "full_auto" and code_project.auto_run_ok(command)) or self.allowed(command)
+        # 2.0: 명령이 무엇을 실행할지 정하는 파일(package.json 등)을 이번에 고쳤다면 기억한 규칙으로 묻지 않고 실행하지 않는다
+        auto = (self.mode == "full_auto" and code_project.auto_run_ok(command)) or \
+            (not self.command_files and self.allowed(command))
         if not auto:
             detail = f"{self.workspace}>\n{command}"
+            if self.command_files:
+                detail += ("\n\n이 작업이 명령의 실행 내용을 정하는 파일을 고쳤습니다(" + ", ".join(sorted(self.command_files)[:5])
+                           + "). 기억한 규칙이 있어도 다시 묻습니다.")
             if info.get("dangers"):
                 detail += "\n\n위험할 수 있는 동작: " + ", ".join(info["dangers"])
             if info.get("network"):
@@ -541,10 +558,24 @@ class CodeAgentApi:
 
     @staticmethod
     def _ca_root(task):
-        """에이전트가 일하는 폴더: 격리 작업이면 worktree, 아니면 작업 폴더."""
-        return task.get("worktree") or task["workspace"]
+        """에이전트가 일하는 폴더: 격리 작업이면 worktree, 아니면 작업 폴더.
+        2.0: 작업 폴더가 저장소의 하위 폴더면 worktree의 같은 하위 폴더(전에는 worktree 맨 위라 작업 폴더 밖까지 고쳤다)."""
+        wt = task.get("worktree")
+        if not wt:
+            return task["workspace"]
+        sub = str(task.get("worktree_sub") or "").strip("/")
+        return os.path.join(wt, *sub.split("/")) if sub else wt
 
     # ---- '다시 묻지 않기' 명령 규칙(작업 폴더별) ----
+
+    def _ca_touched_command_files(self, task_id):
+        """2.0: 이 작업(지난 지시 포함)이 고친 파일 중 명령의 실행 내용을 정하는 파일(package.json 등)이 있는지."""
+        try:
+            changes = self._ca().load(task_id).get("changes") or {}
+        except Exception:
+            return True   # 확인하지 못하면 묻는 쪽으로
+        return any(COMMAND_DEF_FILES.search(str(rel).replace("\\", "/")) for rel, ch in changes.items()
+                   if not (isinstance(ch, dict) and ch.get("reverted")))
 
     def _ca_rules(self, ws):
         rules = ((self._config.get("code") or {}).get("allow_commands") or {}).get(os.path.normcase(str(ws))) or []
@@ -681,12 +712,17 @@ class CodeAgentApi:
                     branch = f"poschat/{task['id']}"
                     try:
                         base = code_project.worktree_create(ws, path, branch)
-                    except code_project.ProjectError:
+                        sub = code_project.repo_prefix(ws)
+                        if sub:   # 2.0: Git에 아직 없는(추적하지 않는) 하위 폴더면 worktree에 없으니 만들어 둔다
+                            Path(path, *sub.strip("/").split("/")).mkdir(parents=True, exist_ok=True)
+                    except (code_project.ProjectError, OSError):
+                        if Path(path).exists():   # 2.0: 만든 뒤 실패했으면 남기지 않는다(새로 만든 빈 브랜치뿐)
+                            code_project.worktree_remove(ws, path, branch)
                         store.delete(task["id"])
                         raise
 
                     def iso(t):
-                        t.update(isolated=True, worktree=str(path), branch=branch, base=base)
+                        t.update(isolated=True, worktree=str(path), branch=branch, base=base, worktree_sub=sub)
                     task = store.update(task["id"], iso)
             history = [storage.make_message(t["role"], t["text"]) for t in task["turns"]]
             root = self._ca_root(task)
@@ -936,7 +972,8 @@ class CodeAgentApi:
             prompt_cache=adaptive_engine.settings(self._config)["prompt_cache"],
             web=connectors.feature_enabled(self._config, "web") and not (
                 adaptive_engine.local_only(self._config) and adaptive_engine.settings(self._config)["local_only_tools"] == "block"),
-            mode=mode, allowed=lambda command: code_project.rule_allows(self._ca_rules(ws), command), steer=steer,
+            mode=mode, allowed=lambda command: not self._ca_touched_command_files(task_id) and code_project.rule_allows(
+                self._ca_rules(ws), command), steer=steer,
             project_note=("격리 작업 공간(git worktree)에서 일합니다. 원래 작업 폴더는 사용자가 '적용'할 때 바뀝니다. "
                           "설치하지 않은 의존성(node_modules·가상환경)은 없을 수 있습니다." if os.path.normcase(str(root)) != os.path.normcase(str(ws))
                           else _remote_note(root)))
@@ -1214,18 +1251,25 @@ class CodeAgentApi:
             if not task.get("worktree") or task.get("worktree_removed"):
                 raise TaskError("격리 작업 공간이 없는 작업입니다.")
             patch = code_project.worktree_patch(task["worktree"], task["base"])
-            result = code_project.worktree_apply(task["workspace"], patch)
-            if discard_after and result.get("applied"):
+            # 2.0: 적용 뒤 worktree와 견줘 모두 반영됐을 때(verified)만 격리 공간·브랜치를 지운다(빠진 변경을 잃지 않게)
+            result = code_project.worktree_apply(task["workspace"], patch, task["worktree"])
+            remove = discard_after and result.get("applied") and result.get("verified")
+            if remove:
                 code_project.worktree_remove(task["workspace"], task["worktree"], task.get("branch"))
 
             def put(t):
                 t["applied_at"] = time.time() if result.get("applied") else t.get("applied_at")
-                if discard_after and result.get("applied"):
+                if remove:
                     t["worktree_removed"] = True
+                if result.get("applied"):
+                    title = (f"📥 원래 작업 폴더에 적용: 파일 {len(result.get('files') or [])}개"
+                             + (" (3-way)" if result.get("three_way") else ""))
+                    if not result.get("verified"):
+                        title = "⚠ " + str(result.get("message") or "적용했지만 확인하지 못해 격리 공간과 브랜치를 남겼습니다")[:400]
+                else:
+                    title = "📥 적용할 변경이 없습니다"
                 t["steps"].append({"n": len(t["steps"]) + 1, "at": time.time(), "kind": "info",
-                                   "title": (f"📥 원래 작업 폴더에 적용: 파일 {len(result.get('files') or [])}개"
-                                             + (" (3-way)" if result.get("three_way") else "")) if result.get("applied")
-                                   else "📥 적용할 변경이 없습니다", "detail": "\n".join(result.get("files") or [])})
+                                   "title": title, "detail": "\n".join(result.get("files") or [])})
             task = store.update(task_id, put)
             return {"task": task, **result}
         return self._ca_call(go)
@@ -1276,8 +1320,9 @@ class CodeAgentApi:
             task = self._ca().load(task_id)
             if not task.get("worktree") or task.get("worktree_removed"):
                 raise TaskError("격리 작업 공간이 없는 작업입니다.")
-            patch = code_project.worktree_patch(task["worktree"], task["base"])
-            return {"diff": patch[:400000], "files": len(re.findall(r"(?m)^diff --git ", patch))}
+            patch = code_project.worktree_patch(task["worktree"], task["base"])   # 2.0: bytes(보기용으로만 풀어 쓴다)
+            text = patch.decode("utf-8", errors="replace") if isinstance(patch, (bytes, bytearray)) else str(patch)
+            return {"diff": text[:400000], "files": len(re.findall(r"(?m)^diff --git ", text))}
         return self._ca_call(go)
 
     def _ca_shutdown(self):

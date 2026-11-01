@@ -13,6 +13,7 @@ import base64
 import json
 import re
 import shutil
+import threading
 import time
 import uuid
 
@@ -37,6 +38,11 @@ def _dir(note_id):
     if not isinstance(note_id, str) or not _ID_RE.match(note_id):
         raise NoteError("잘못된 노트 ID입니다.")
     return NOTES_DIR / note_id
+
+
+# 2.0: 전사(transcript.json)는 받아 적는 스레드(append_segment)와 서버 보정 스레드(apply_refinement)가 함께 고친다.
+# 읽고-고치고-쓰는 동안 잠그지 않으면 한쪽이 다른 쪽이 넣은 구간을 덮어 지운다
+_transcript_lock = threading.RLock()
 
 
 def _read_json(path, default):
@@ -150,6 +156,11 @@ def transcript(note_id):
 
 
 def append_segment(note_id, segment):
+    with _transcript_lock:
+        return _append_segment(note_id, segment)
+
+
+def _append_segment(note_id, segment):
     items = transcript(note_id)
     item = {"start": float(segment["start"]), "end": float(segment["end"]), "text": str(segment["text"])}
     for key in ("id", "conf", "src"):
@@ -167,6 +178,11 @@ def next_segment_id(note_id):
 def apply_refinement(note_id, ids, fixed):
     """서버 보정 결과를 전사에 반영한다. fixed가 ids와 같은 길이의 목록이면 구간마다 바꾸고,
     이어 쓴 글(str)이면 그 구간들을 하나로 합친다. 빈 글이 된 구간은 지운다. 바뀐 전사를 돌려준다."""
+    with _transcript_lock:
+        return _apply_refinement(note_id, ids, fixed)
+
+
+def _apply_refinement(note_id, ids, fixed):
     items = transcript(note_id)
     targets = [x for x in items if x.get("id") in set(ids)]
     if not targets:

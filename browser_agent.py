@@ -43,12 +43,14 @@ SNAPSHOT_SCRIPT = r"""
   const SEL = 'a[href], button, input, select, textarea, summary, [role=button], [role=link], [role=checkbox], [role=radio], ' +
     '[role=tab], [role=menuitem], [role=option], [role=switch], [role=combobox], [role=textbox], [contenteditable=""], [contenteditable=true], [onclick]';
   const vw = window.innerWidth, vh = window.innerHeight;
+  // 2.0: 입력 칸의 값(사용자가 친 비밀번호·OTP 등)은 이름표로 쓰지 않는다. 값이 곧 이름표인 버튼형 input만 쓴다
+  const valueLabel = (x) => (x.tagName === 'INPUT' && ['button', 'submit', 'reset'].includes((x.type || '').toLowerCase())) ? x.value : '';
   const label = (e) => {
     let t = e.getAttribute('aria-label') || '';
     if (!t && e.labels && e.labels.length) t = e.labels[0].innerText;
     if (!t && e.id) { const l = document.querySelector('label[for="' + CSS.escape(e.id) + '"]'); if (l) t = l.innerText; }
     if (!t && e.tagName === 'SELECT') t = e.getAttribute('name') || e.getAttribute('title') || '';
-    if (!t && e.tagName !== 'SELECT') t = e.innerText || e.value || e.getAttribute('placeholder') || e.getAttribute('title') || e.getAttribute('alt') || '';
+    if (!t && e.tagName !== 'SELECT') t = e.innerText || valueLabel(e) || e.getAttribute('placeholder') || e.getAttribute('title') || e.getAttribute('alt') || '';
     if (!t) { const img = e.querySelector && e.querySelector('img[alt]'); if (img) t = img.alt; }
     return String(t).replace(/\s+/g, ' ').trim().slice(0, 120);
   };
@@ -107,12 +109,13 @@ ACTION_SCRIPT = r"""
   const TOKEN = %(token)s, ID = %(id)s, OP = %(op)s, ARG = %(arg)s, SIG = %(sig)s;
   const e = document.querySelector('[data-poschat-id="' + TOKEN + '-' + ID + '"]');
   if (!e) return JSON.stringify({ error: 'stale' });
+  const valueLabel = (x) => (x.tagName === 'INPUT' && ['button', 'submit', 'reset'].includes((x.type || '').toLowerCase())) ? x.value : '';
   const label = (x) => {
     let t = x.getAttribute('aria-label') || '';
     if (!t && x.labels && x.labels.length) t = x.labels[0].innerText;
     if (!t && x.id) { const l = document.querySelector('label[for="' + CSS.escape(x.id) + '"]'); if (l) t = l.innerText; }
     if (!t && x.tagName === 'SELECT') t = x.getAttribute('name') || x.getAttribute('title') || '';
-    if (!t && x.tagName !== 'SELECT') t = x.innerText || x.value || x.getAttribute('placeholder') || x.getAttribute('title') || x.getAttribute('alt') || '';
+    if (!t && x.tagName !== 'SELECT') t = x.innerText || valueLabel(x) || x.getAttribute('placeholder') || x.getAttribute('title') || x.getAttribute('alt') || '';
     if (!t) { const img = x.querySelector && x.querySelector('img[alt]'); if (img) t = img.alt; }
     return String(t).replace(/\s+/g, ' ').trim().slice(0, 120);
   };
@@ -552,7 +555,9 @@ class BrowserAgent:
             raise AgentBrowserError("http·https가 아닌 링크는 열지 않습니다.")
         if not self._check_page(snap, "누르기"):
             return self._denied("click", el, snap)
-        if href and browser_mod.allowed(href) and level == "auto":
+        # 2.0: '물어보기(ask)' 링크도 다른 사이트·내부망이면 사이트 승인을 받는다. ask는 '이번 실행 동안 허용'·auto_all로
+        # 자동 승인될 수 있어, 이름이 애매한 링크('더보기')로 승인하지 않은 호스트에 갈 수 있었다. always는 늘 묻는다
+        if href and browser_mod.allowed(href) and level != "always":
             target = site_of(host_of(href))
             if (target not in self.sites or local_host(target)) and target != site_of(host_of(snap.get("url"))):
                 if not self._check_site(href, "이동", link=True):
@@ -642,6 +647,8 @@ class BrowserAgent:
         self._guard("extract", {"id": eid})
         if eid:
             snap, el = self._element(eid)
+            if el.get("sensitive"):  # 2.0: 비밀번호·OTP·카드 칸의 값은 읽어 모델에 보내지 않는다
+                raise AgentBrowserError("민감한 입력 칸(비밀번호·인증 번호·카드)의 값은 읽지 않습니다.")
             res = self._act(snap, "extract", el)
             text, url = res.get("text") or "", res.get("url") or ""
         else:

@@ -60,12 +60,12 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(items["productivity:start"]["description"], "Start")  # 모델에 가는 원문은 그대로
         self.assertEqual(items["summarize"]["description_ko"], "")
 
-    def test_default_window_mode_is_fullscreen_and_old_implicit_normal_is_reset_once(self):
+    def test_old_implicit_normal_is_reset_once(self):
         cfg = storage.load_config()
         cfg["window_mode"] = "normal"  # 1.19.0이 설정 저장 때 함께 적어 둔 값
         storage.save_config(cfg)
         b = self.bridge()
-        self.assertEqual(b._window_mode(), "fullscreen")
+        self.assertEqual(b._window_mode(), "maximized")  # 2.0 기본값
         # 1.19.1에서 '기본 창'을 직접 고르면 다음 실행에도 그대로
         b.save_settings({"window_mode": "normal"})
         self.assertEqual(self.bridge()._window_mode(), "normal")

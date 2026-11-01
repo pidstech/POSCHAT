@@ -313,6 +313,26 @@ def _obj(kind, oid, updated, data, deleted=None):
     return {"kind": kind, "id": oid, "updated": float(updated or 0), "deleted": deleted, "data": data}
 
 
+def _still_on_disk(kind, ident):
+    """2.0: collect가 건너뛴 대화·PO노트가 정말 지워졌는지(파일이 없는지) 확인한다."""
+    import po_note
+
+    try:
+        if kind == "thread":
+            path = storage.THREADS_DIR / f"{ident}.json"
+            if not path.exists():
+                return False
+            try:  # 읽히는데 메시지가 없으면(빈 대화) 예전처럼 지운 것으로 본다
+                return bool(json.loads(path.read_text(encoding="utf-8")).get("messages"))
+            except (OSError, ValueError, AttributeError):
+                return True
+        if kind == "po":
+            return (po_note.NOTES_DIR / ident / "meta.json").exists()
+    except (OSError, ValueError):
+        return True  # 확인하지 못하면 지우지 않는다
+    return False
+
+
 def collect(include, config):
     """{키: 객체}. 키는 "종류:ID"."""
     import po_note
@@ -593,6 +613,10 @@ def _sync(config, backend, key, device, device_name, on_settings, now):
         base = info.get("hash")
         loc = local.get(key_)
         if loc is None and info and not info.get("deleted") and kind in ("thread", "po"):
+            if _still_on_disk(kind, key_.split(":", 1)[1]):
+                # 2.0: 파일은 있는데 읽지 못했다(깨짐·백신이 잠금). 지운 것으로 보내면 다른 기기의 멀쩡한 사본까지 지워진다
+                report["errors"].append(f"{key_}: 이 기기의 파일을 읽지 못해 이번에는 건너뜁니다.")
+                continue
             loc = _obj(kind, key_.split(":", 1)[1], now, None, now)  # 지난번 이후 이 기기에서 지웠다
         rem_entry = remote.get(key_)
         rem = rem_entry[0] if rem_entry else None

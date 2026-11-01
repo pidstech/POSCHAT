@@ -160,6 +160,9 @@ class BrowserApi:
                         raise plms.PlmsError("브라우저를 쓰는 에이전트를 멈춘 뒤 로그인하세요.")
                 self._browser().open(plms.LOGIN)
                 return {"mode": "visible", "url": plms.LOGIN}
+            with self._lock:  # 2.0: 저장된 계정이 있어도 에이전트가 쓰는 웹 뷰를 PLMS 로그인 페이지로 옮기지 않는다
+                if self._browser_owner is not None:
+                    raise plms.PlmsError("브라우저를 쓰는 에이전트를 멈춘 뒤 로그인하세요.")
             self._plms_block_until = 0.0  # 사용자가 직접 누른 로그인은 막지 않는다
             if self._plms_relogin(self._browser(), lambda: False, force=True):
                 return {"mode": "background", "message": "PLMS에 로그인했습니다."}
