@@ -278,11 +278,10 @@ def _xml_text(text):
     return escape(text)
 
 
-# MSIX 그림: 이름 → 크기(px). targetsize·unplated는 작업 표시줄에서 아이콘 뒤에 색 상자를 깔지 않게 한다.
+# MSIX 그림: 이름 → 크기(px). 자원 한정자가 붙은 이름(targetsize-44 등)은 resources.pri가 있어야 하므로 쓰지 않는다.
 MSIX_LOGOS = {
     "StoreLogo.png": 50,
     "Square44x44Logo.png": 44,
-    "Square44x44Logo.targetsize-44_altform-unplated.png": 44,
     "Square150x150Logo.png": 150,
 }
 
@@ -310,10 +309,18 @@ def build_msix(app_dir, target):
     identity = msix_identity()
     layout = msix_layout(app_dir, WORK / "msix", version.APP_VERSION, identity)
     target.unlink(missing_ok=True)
-    r = subprocess.run([sdk_tool("makeappx.exe"), "pack", "/d", str(layout), "/p", str(target), "/o"],
+    # CI 러너의 %TEMP%는 짧은 이름(RUNNER~1)이다. makeappx가 0x8007007b(경로 문법 오류)로 실패한 적이 있어
+    # 긴 이름으로 바꾸고, 결과도 작업 폴더에 만든 뒤 옮긴다.
+    layout = Path(os.path.realpath(layout))
+    built = Path(os.path.realpath(WORK)) / MSIX_FILE
+    built.unlink(missing_ok=True)
+    r = subprocess.run([sdk_tool("makeappx.exe"), "pack", "/d", str(layout), "/p", str(built), "/o"],
                        capture_output=True, text=True, errors="replace")
     if r.returncode != 0:   # makeappx는 실패 이유(매니페스트 오류·파일 이름 등)를 표준 출력에 쓴다
-        sys.exit(f"makeappx 실패({r.returncode}):\n{r.stdout[-6000:]}\n{r.stderr[-2000:]}")
+        lines = [x for x in r.stdout.splitlines() if x.strip() and not x.startswith("Processing ")]
+        sys.exit(f"makeappx 실패({r.returncode}, 파일 {r.stdout.count('Processing ')}개 처리):\n"
+                 + "\n".join(lines[-40:]) + f"\n{r.stderr[-2000:]}")
+    shutil.move(str(built), str(target))
     test = "" if os.environ.get("MSIX_PUBLISHER", "").strip() else " — 시험용 게시자(Store에 낼 수 없음)"
     print(f"완료: {target} ({target.stat().st_size / 1024 / 1024:.1f} MB, {identity['name']}{test})")
 
