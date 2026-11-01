@@ -305,9 +305,27 @@ def msix_layout(app_dir, layout, app_version, identity):
     return layout
 
 
+# MSIX 패키지 안 파일 이름 규칙: Windows 예약 장치 이름(확장자가 붙어도), 금지 문자, 끝의 점·공백은 넣을 수 없다.
+MSIX_RESERVED = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(10)), *(f"lpt{i}" for i in range(10))}
+
+
+def msix_bad_names(layout):
+    """패키지에 넣을 수 없는 이름의 파일·폴더(layout 기준 상대 경로) 목록."""
+    bad = []
+    for f in sorted(Path(layout).rglob("*")):
+        name = f.name
+        if (name.split(".")[0].lower() in MSIX_RESERVED or name.endswith((".", " "))
+                or any(c in name for c in '<>:"|?*%') or any(ord(c) < 32 for c in name)):
+            bad.append(f.relative_to(layout).as_posix())
+    return bad
+
+
 def build_msix(app_dir, target):
     identity = msix_identity()
     layout = msix_layout(app_dir, WORK / "msix", version.APP_VERSION, identity)
+    bad = msix_bad_names(layout)
+    if bad:
+        sys.exit("MSIX에 넣을 수 없는 이름의 파일: " + ", ".join(bad[:20]))
     target.unlink(missing_ok=True)
     # CI 러너의 %TEMP%는 짧은 이름(RUNNER~1)이다. makeappx가 0x8007007b(경로 문법 오류)로 실패한 적이 있어
     # 긴 이름으로 바꾸고, 결과도 작업 폴더에 만든 뒤 옮긴다.
@@ -317,9 +335,12 @@ def build_msix(app_dir, target):
     r = subprocess.run([sdk_tool("makeappx.exe"), "pack", "/d", str(layout), "/p", str(built), "/o"],
                        capture_output=True, text=True, errors="replace")
     if r.returncode != 0:   # makeappx는 실패 이유(매니페스트 오류·파일 이름 등)를 표준 출력에 쓴다
-        lines = [x for x in r.stdout.splitlines() if x.strip() and not x.startswith("Processing ")]
-        sys.exit(f"makeappx 실패({r.returncode}, 파일 {r.stdout.count('Processing ')}개 처리):\n"
-                 + "\n".join(lines[-40:]) + f"\n{r.stderr[-2000:]}")
+        out = [x for x in r.stdout.splitlines() if x.strip()]
+        done = [x for x in out if x.startswith("Processing ")]
+        sys.exit(f"makeappx 실패({r.returncode}, 파일 {len(done)}개 처리):\n"
+                 + "\n".join(x for x in out if not x.startswith("Processing ")) + "\n마지막으로 처리한 파일:\n"
+                 + "\n".join(done[-3:]) + f"\n{r.stderr[-2000:]}\n확장자: "
+                 + " ".join(sorted({f.suffix for f in layout.rglob("*") if f.is_file()})))
     shutil.move(str(built), str(target))
     test = "" if os.environ.get("MSIX_PUBLISHER", "").strip() else " — 시험용 게시자(Store에 낼 수 없음)"
     print(f"완료: {target} ({target.stat().st_size / 1024 / 1024:.1f} MB, {identity['name']}{test})")
