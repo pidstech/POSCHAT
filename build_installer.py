@@ -310,8 +310,10 @@ def build_msix(app_dir, target):
     identity = msix_identity()
     layout = msix_layout(app_dir, WORK / "msix", version.APP_VERSION, identity)
     target.unlink(missing_ok=True)
-    subprocess.run([sdk_tool("makeappx.exe"), "pack", "/d", str(layout), "/p", str(target), "/o"],
-                   check=True, stdout=subprocess.DEVNULL)
+    r = subprocess.run([sdk_tool("makeappx.exe"), "pack", "/d", str(layout), "/p", str(target), "/o"],
+                       capture_output=True, text=True, errors="replace")
+    if r.returncode != 0:   # makeappx는 실패 이유(매니페스트 오류·파일 이름 등)를 표준 출력에 쓴다
+        sys.exit(f"makeappx 실패({r.returncode}):\n{r.stdout[-6000:]}\n{r.stderr[-2000:]}")
     test = "" if os.environ.get("MSIX_PUBLISHER", "").strip() else " — 시험용 게시자(Store에 낼 수 없음)"
     print(f"완료: {target} ({target.stat().st_size / 1024 / 1024:.1f} MB, {identity['name']}{test})")
 
