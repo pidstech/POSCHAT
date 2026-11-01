@@ -17,18 +17,6 @@
 ## 다운로드 및 설치
 다운로드: https://pidstech.com/poschat
 
-[Windows]
-1) POSCHAT-Setup.exe 다운로드 후 실행
-2) 아직 코드 서명이 없어서 Windows 경고가 뜰 수 있습니다. "추가 정보 → 실행"을 누르면 됩니다.
-3) "설치" 클릭 (관리자 권한 필요 없음)
-4) 처음 실행할 때 POSTECH GenAI API 키 입력 (또는 설정에서 본인의 Claude/OpenAI 키 등록)
-
-[macOS] (Apple Silicon M1 이상만 지원, Intel Mac은 미지원)
-1) POSCHAT-mac.dmg를 열고 POSCHAT을 응용 프로그램 폴더로 드래그
-2) 서명이 없는 앱이라 Control 키를 누른 채 클릭 → "열기"
-   (macOS 15 이상은 설정 → 개인정보 보호 및 보안 → "그래도 열기")
-3) 처음 실행할 때 API 키 입력
-
 ## 참고해주세요
 - 포스텍 공식 서비스가 아닌 PIDS Tech.에서 만든 비공식 프로젝트입니다.
 - 사용하려면 유효한 API 키가 필요합니다.
