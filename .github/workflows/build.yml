@@ -142,11 +142,15 @@ jobs:
           "WINDOWS_SIGN_PASSWORD=$env:PFX_PASSWORD" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Build
+        # MSIX_*: 파트너 센터 → 제품 ID 값(저장소 변수). 없으면 시험용 게시자로 만들어 CI에서만 쓴다(docs/microsoft-store.md).
         # 러너 콘솔은 cp1252라서 빌드 스크립트의 한글 출력에서 UnicodeEncodeError가 난다.
         # 자가 진단은 사용자 PC와 같은 조건이어야 하므로 이 단계에만 UTF-8을 켠다.
         env:
           PYTHONUTF8: "1"
           PYTHONIOENCODING: utf-8
+          MSIX_IDENTITY_NAME: ${{ vars.MSIX_IDENTITY_NAME }}
+          MSIX_PUBLISHER: ${{ vars.MSIX_PUBLISHER }}
+          MSIX_PUBLISHER_DISPLAY_NAME: ${{ vars.MSIX_PUBLISHER_DISPLAY_NAME }}
         run: python build_installer.py
 
       - name: License files in the app
@@ -209,12 +213,66 @@ jobs:
           if (-not $report.Contains("distribution: store")) { Write-Error "Store판이 Store 모드로 실행되지 않습니다."; exit 1 }
           if (Test-Path (Join-Path $env:RUNNER_TEMP "PostechChat-install\_internal\distribution.txt")) { Write-Error "GitHub판에 distribution.txt가 들어갔습니다."; exit 1 }
 
+      - name: Microsoft Store package (MSIX install and self-test)
+        # 2.0.1: Store(MSIX 방식)는 Microsoft가 다시 서명하므로 올리는 파일은 서명하지 않는다. 여기서는 사본에 시험용 인증서로
+        # 서명해 실제로 설치하고, 패키지 안(읽기 전용 WindowsApps 폴더, AppData 가상화)에서 앱이 Store판으로 도는지 본다.
+        shell: pwsh
+        env:
+          MSIX_PUBLISHER: ${{ vars.MSIX_PUBLISHER }}
+        run: |
+          $msix = "release\POSCHAT.msix"
+          if (-not (Test-Path $msix)) { Write-Error "POSCHAT.msix가 없습니다."; exit 1 }
+          $publisher = python -c "import build_installer; print(build_installer.msix_identity()['publisher'])"
+          $cert = New-SelfSignedCertificate -Type Custom -Subject $publisher -KeyUsage DigitalSignature -FriendlyName "POSCHAT MSIX test" `
+            -CertStoreLocation "Cert:\CurrentUser\My" -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}")
+          $pfx = Join-Path $env:RUNNER_TEMP "msix-test.pfx"
+          $pw = ConvertTo-SecureString -String "test" -Force -AsPlainText
+          Export-PfxCertificate -Cert $cert -FilePath $pfx -Password $pw | Out-Null
+          Import-PfxCertificate -FilePath $pfx -CertStoreLocation "Cert:\LocalMachine\TrustedPeople" -Password $pw | Out-Null
+          $test = Join-Path $env:RUNNER_TEMP "POSCHAT-test.msix"
+          Copy-Item $msix $test
+          $signtool = python -c "import build_installer; print(build_installer.signtool())"
+          & $signtool sign /fd SHA256 /f $pfx /p test $test
+          if ($LASTEXITCODE -ne 0) { Write-Error "시험용 서명 실패"; exit 1 }
+          Add-AppxPackage -Path $test
+          $pkg = Get-AppxPackage | Where-Object { $_.Publisher -eq $publisher }
+          if (-not $pkg) { Write-Error "MSIX가 설치되지 않았습니다."; exit 1 }
+          $version = python -c "from version import APP_VERSION; print(APP_VERSION)"
+          Write-Output "설치됨: $($pkg.PackageFullName) ($($pkg.InstallLocation))"
+          if ($pkg.Version -ne "$version.0") { Write-Error "패키지 버전($($pkg.Version))이 $version.0이 아닙니다."; exit 1 }
+          Remove-Item (Join-Path $env:APPDATA "PostechChat\selftest.txt") -ErrorAction SilentlyContinue
+          $alias = Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps\poschat.exe"
+          Start-Process -FilePath $alias -ArgumentList "--selftest"
+          # 패키지 앱이 AppData에 새로 만든 파일은 패키지 전용 폴더(LocalCache\Roaming)로 간다. 두 곳 모두 찾는다.
+          $candidates = @((Join-Path $env:APPDATA "PostechChat\selftest.txt"),
+                          (Join-Path $env:LOCALAPPDATA "Packages\$($pkg.PackageFamilyName)\LocalCache\Roaming\PostechChat\selftest.txt"))
+          $report = $null
+          for ($i = 0; $i -lt 120 -and -not $report; $i++) {
+            Start-Sleep -Seconds 1
+            $report = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          }
+          if (-not $report) { Write-Error "패키지 앱이 자가 진단 결과를 남기지 않았습니다(실행 실패)."; exit 1 }
+          Start-Sleep -Seconds 2
+          Write-Output "자가 진단: $report"
+          Get-Content $report
+          $text = Get-Content $report -Raw
+          foreach ($want in "version: $version", "distribution: store", "web: True", "documents: OK", "code: OK", "terminal: OK", "stt: OK", "lab-agents: OK") {
+            if (-not $text.Contains($want)) { Write-Error "MSIX 자가 진단에 '$want'이(가) 없습니다."; exit 1 }
+          }
+          Remove-AppxPackage -Package $pkg.PackageFullName
+
       - uses: actions/upload-artifact@v4
         with:
           name: POSCHAT-Setup
           path: |
             release/POSCHAT-Setup.exe
             release/POSCHAT-Store-Setup.exe
+
+      # 서명하지 않은 MSIX는 Windows가 설치하지 않으므로 릴리스에 올리지 않는다. 이 산출물을 받아 파트너 센터에 올린다.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: POSCHAT-msix
+          path: release/POSCHAT.msix
 
   browser-spike:
     # 1.13 브라우저 기술 검증 + 1.15 B1(앱 멈춤) 회귀 시험: 실제 pywebview 창에 네이티브 웹페이지 뷰(WebView2·WKWebView)를 붙여

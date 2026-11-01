@@ -5,7 +5,7 @@
     python build_installer.py
 
 필요 패키지: requirements.txt와 pyinstaller (pip install -r requirements.txt pyinstaller)
-결과: Windows는 release/POSCHAT-Setup.exe와 release/POSCHAT-Store-Setup.exe(Microsoft Store 제출용, 1.18),
+결과: Windows는 release/POSCHAT-Setup.exe, release/POSCHAT-Store-Setup.exe(1.18), release/POSCHAT.msix(Microsoft Store 제출용, 2.0.1),
 macOS는 release/POSCHAT-mac.dmg(앱 아이콘을 위해 pillow도 필요)
 빌드 중간 파일은 %TEMP%\\PostechChat-build 에 만든다(클라우드 동기화 폴더에서 빌드하면 느리다).
 
@@ -29,6 +29,10 @@ SETUP_FILE = "POSCHAT-Setup.exe"
 # Microsoft Store 제출용(EXE 방식): 앱이 스스로 업데이트하지 않고 Store로 안내한다(version.distribution).
 # Store는 설치 파일과 그 안의 모든 PE 파일(exe·dll·pyd)이 신뢰받는 CA의 인증서로 서명돼 있어야 받는다(정책 10.2.9).
 STORE_SETUP_FILE = "POSCHAT-Store-Setup.exe"
+# 2.0.1 Microsoft Store 제출용(MSIX 방식): Store가 심사 뒤 Microsoft 인증서로 다시 서명하므로 코드 서명 인증서가 없어도 된다.
+# 사용자는 브라우저로 exe를 받지 않고 Store에서 설치하므로 Chrome·SmartScreen의 다운로드 경고가 뜨지 않는다.
+# 서명하지 않은 MSIX는 Windows가 설치하지 않으므로 릴리스에는 올리지 않고 CI 산출물로만 둔다(파트너 센터에 직접 올린다).
+MSIX_FILE = "POSCHAT.msix"
 PE_SUFFIXES = (".exe", ".dll", ".pyd")
 DMG_FILE = "POSCHAT-mac.dmg"
 WORK = Path(tempfile.gettempdir()) / "PostechChat-build"
@@ -196,6 +200,158 @@ def main():
         sign(target)
         print(f"완료: {target} ({target.stat().st_size / 1024 / 1024:.1f} MB)")
 
+    print("[+] Microsoft Store 패키지(MSIX)")
+    build_msix(app_dir, out / MSIX_FILE)
+
+
+def msix_identity():
+    """파트너 센터 → 제품 ID(Product identity)에 나오는 세 값. 저장소 변수(MSIX_*)로 넣는다.
+
+    값이 없으면 시험용 값으로 만든다. 이 패키지는 CI 자가 진단에만 쓰고 Store에는 낼 수 없다(게시자가 달라 거절됨).
+    """
+    return {
+        "name": os.environ.get("MSIX_IDENTITY_NAME", "").strip() or "PIDSTech.POSCHAT.Test",
+        "publisher": os.environ.get("MSIX_PUBLISHER", "").strip() or "CN=POSCHAT Test",
+        "publisher_display": os.environ.get("MSIX_PUBLISHER_DISPLAY_NAME", "").strip() or "PIDS Tech.",
+    }
+
+
+def msix_version(app_version):
+    """MSIX 버전은 숫자 네 개이고, Store는 마지막 자리가 0이어야 받는다(2.0.0 → 2.0.0.0)."""
+    parts = [int(p) for p in app_version.split(".")]
+    if len(parts) != 3 or any(not 0 <= p <= 65535 for p in parts):
+        raise ValueError(f"MSIX 버전으로 바꿀 수 없는 앱 버전: {app_version}")
+    return ".".join(map(str, parts)) + ".0"
+
+
+def msix_manifest(app_version, identity):
+    """AppxManifest.xml. 일반 데스크톱 앱(전체 신뢰, runFullTrust)으로 PostechChat.exe를 그대로 실행한다."""
+    from xml.sax.saxutils import quoteattr
+
+    q = quoteattr
+    return f"""<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+         xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+         xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+         xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+         xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+         IgnorableNamespaces="uap uap3 desktop rescap">
+  <Identity Name={q(identity["name"])} Publisher={q(identity["publisher"])}
+            Version="{msix_version(app_version)}" ProcessorArchitecture="x64" />
+  <Properties>
+    <DisplayName>{APP_NAME}</DisplayName>
+    <PublisherDisplayName>{_xml_text(identity["publisher_display"])}</PublisherDisplayName>
+    <Logo>Assets\\StoreLogo.png</Logo>
+  </Properties>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+  <Resources>
+    <Resource Language="ko-KR" />
+  </Resources>
+  <Applications>
+    <Application Id="POSCHAT" Executable="PostechChat.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements DisplayName="{APP_NAME}" Description="학생과 연구자를 위한 AI 작업 공간"
+                          BackgroundColor="transparent"
+                          Square150x150Logo="Assets\\Square150x150Logo.png" Square44x44Logo="Assets\\Square44x44Logo.png" />
+      <Extensions>
+        <!-- 명령 줄에서 poschat.exe로 실행(CI 자가 진단도 이 이름으로 실행한다) -->
+        <uap3:Extension Category="windows.appExecutionAlias" Executable="PostechChat.exe" EntryPoint="Windows.FullTrustApplication">
+          <uap3:AppExecutionAlias>
+            <desktop:ExecutionAlias Alias="poschat.exe" />
+          </uap3:AppExecutionAlias>
+        </uap3:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+  <Capabilities>
+    <Capability Name="internetClient" />
+    <rescap:Capability Name="runFullTrust" />
+    <DeviceCapability Name="microphone" />
+  </Capabilities>
+</Package>
+"""
+
+
+def _xml_text(text):
+    from xml.sax.saxutils import escape
+    return escape(text)
+
+
+# MSIX 그림: 이름 → 크기(px). 자원 한정자가 붙은 이름(targetsize-44 등)은 resources.pri가 있어야 하므로 쓰지 않는다.
+MSIX_LOGOS = {
+    "StoreLogo.png": 50,
+    "Square44x44Logo.png": 44,
+    "Square150x150Logo.png": 150,
+}
+
+
+def msix_layout(app_dir, layout, app_version, identity):
+    """makeappx에 넘길 폴더: 앱 + Store판 표시(distribution.txt) + 그림 + AppxManifest.xml."""
+    from PIL import Image
+
+    if layout.exists():
+        shutil.rmtree(layout)
+    shutil.copytree(app_dir, layout)
+    # python-docx의 풀어 둔 서식 원본(default.docx를 만들 때 쓴 것, 실행 중에는 읽지 않음)에는 OPC 예약 이름(_rels/.rels,
+    # [Content_Types].xml)이 있어 makeappx가 0x8007007b로 실패한다. 앱이 쓰는 default.docx는 그대로 둔다.
+    for name in MSIX_DROP:
+        shutil.rmtree(layout / name, ignore_errors=True)
+    # Store판: 스스로 업데이트 파일을 받지 않고 Store로 안내한다(version.distribution). MSIX는 Store가 업데이트한다.
+    (layout / "_internal" / version.DISTRIBUTION_FILE).write_text("store\n", encoding="utf-8")
+    assets = layout / "Assets"
+    assets.mkdir()
+    with Image.open(ICON_PNG) as icon:
+        icon = icon.convert("RGBA")
+        for name, size in MSIX_LOGOS.items():
+            icon.resize((size, size), Image.LANCZOS).save(assets / name)
+    (layout / "AppxManifest.xml").write_text(msix_manifest(app_version, identity), encoding="utf-8")
+    return layout
+
+
+# MSIX 패키지 안 파일 이름 규칙: Windows 예약 장치 이름(확장자가 붙어도), 금지 문자, 끝의 점·공백, 패키지 형식(OPC)이
+# 쓰는 예약 이름(_rels 폴더, [Content_Types].xml)은 넣을 수 없다.
+MSIX_RESERVED = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(10)), *(f"lpt{i}" for i in range(10))}
+MSIX_DROP = ["_internal/docx/templates/default-docx-template"]
+
+
+def msix_bad_names(layout):
+    """패키지에 넣을 수 없는 이름의 파일·폴더(layout 기준 상대 경로) 목록."""
+    bad = []
+    for f in sorted(Path(layout).rglob("*")):
+        name = f.name
+        if (name.split(".")[0].lower() in MSIX_RESERVED or name.endswith((".", " "))
+                or name.lower() in ("_rels", "[content_types].xml")
+                or any(c in name for c in '<>:"|?*%') or any(ord(c) < 32 for c in name)):
+            bad.append(f.relative_to(layout).as_posix())
+    return bad
+
+
+def build_msix(app_dir, target):
+    identity = msix_identity()
+    layout = msix_layout(app_dir, WORK / "msix", version.APP_VERSION, identity)
+    bad = msix_bad_names(layout)
+    if bad:
+        sys.exit("MSIX에 넣을 수 없는 이름의 파일: " + ", ".join(bad[:20]))
+    target.unlink(missing_ok=True)
+    # CI 러너의 %TEMP%는 짧은 이름(RUNNER~1)이다. makeappx가 0x8007007b(경로 문법 오류)로 실패한 적이 있어
+    # 긴 이름으로 바꾸고, 결과도 작업 폴더에 만든 뒤 옮긴다.
+    layout = Path(os.path.realpath(layout))
+    built = Path(os.path.realpath(WORK)) / MSIX_FILE
+    built.unlink(missing_ok=True)
+    r = subprocess.run([sdk_tool("makeappx.exe"), "pack", "/d", str(layout), "/p", str(built), "/o"],
+                       capture_output=True, text=True, errors="replace")
+    if r.returncode != 0:   # makeappx는 실패 이유(매니페스트 오류·파일 이름 등)를 표준 출력에 쓴다
+        out = [x for x in r.stdout.splitlines() if x.strip()]
+        done = [x for x in out if x.startswith("Processing ")]
+        sys.exit(f"makeappx 실패({r.returncode}, 파일 {len(done)}개 처리):\n"
+                 + "\n".join(x for x in out if not x.startswith("Processing ")) + "\n마지막으로 처리한 파일:\n"
+                 + "\n".join(done[-3:]) + f"\n{r.stderr[-2000:]}\n확장자: "
+                 + " ".join(sorted({f.suffix for f in layout.rglob("*") if f.is_file()})))
+    shutil.move(str(built), str(target))
+    test = "" if os.environ.get("MSIX_PUBLISHER", "").strip() else " — 시험용 게시자(Store에 낼 수 없음)"
+    print(f"완료: {target} ({target.stat().st_size / 1024 / 1024:.1f} MB, {identity['name']}{test})")
+
 
 def zip_app(app_dir, target, extra=None):
     """앱 폴더를 설치 프로그램에 넣을 payload.zip으로. extra: {zip 안 경로: 글} — 더 넣을 파일."""
@@ -207,12 +363,16 @@ def zip_app(app_dir, target, extra=None):
             zf.writestr(name, text)
 
 
-def signtool():
+def sdk_tool(name):
     kits = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "Windows Kits" / "10" / "bin"
-    tools = sorted(kits.glob("*/x64/signtool.exe"))
+    tools = sorted(kits.glob(f"*/x64/{name}"))
     if not tools:
-        sys.exit("signtool.exe를 찾지 못했습니다. Windows SDK를 설치하세요.")
+        sys.exit(f"{name}를 찾지 못했습니다. Windows SDK를 설치하세요.")
     return str(tools[-1])
+
+
+def signtool():
+    return sdk_tool("signtool.exe")
 
 
 def sign(*paths):

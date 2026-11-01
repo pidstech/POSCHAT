@@ -44,6 +44,7 @@
 
 ### Future Work: 다운로드 경고(Chrome·Windows SmartScreen) 줄이기 — 2026-10-31 메모, 다음에 진행
 공개 다운로드 때 Chrome·SmartScreen이 설치 파일에 경고를 띄우는 문제. 1.19.0에는 넣지 않았다(사용자 결정: 메모만 남기고 다음 날 진행).
+- **Microsoft Store(MSIX) — 2026-11-01 진행(사용자 결정)**: Windows는 Store 설치로 브라우저 다운로드 자체를 없앤다. MSIX는 Microsoft가 다시 서명하므로 인증서가 필요 없다. 빌드·CI 설치 시험은 들어갔고(`build_installer.build_msix`, 산출물 `POSCHAT-msix`), 파트너 센터 계정·이름 예약·저장소 변수(`MSIX_*`)·제출은 사용자가 한다([microsoft-store.md](microsoft-store.md)). 직접 다운로드 exe의 경고는 아래 코드 서명이 있어야 줄어든다.
 - **코드 서명(가장 중요)**: 공인 CA 코드 서명 인증서로 설치 파일과 안의 exe·dll·pyd까지 서명. 일반(OV) 인증서는 다운로드 평판이 쌓일 때까지 경고가 남을 수 있고, EV는 처음부터 SmartScreen 평판을 받는다. 빌드 쪽은 이미 준비돼 있다: `build_installer.sign`·`sign_tree`가 `WINDOWS_SIGN_PFX`·`WINDOWS_SIGN_PASSWORD`가 있으면 모든 PE 파일에 서명한다(CI의 *Prepare code signing certificate* 단계). 인증서가 하드웨어 토큰·클라우드 HSM 방식이면(최근 CA 정책상 대부분) CI 서명 단계를 그 방식(예: Azure Trusted Signing·signtool + KSP)으로 바꾼다. macOS는 Apple Developer ID 서명·공증(notarization)이 따로 필요하다.
 - **HTTPS·헤더 확인**: 다운로드 페이지(pidstech.com)와 실제 파일 주소(GitHub Releases·업데이트 서버)가 모두 https인지, 혼합 콘텐츠가 없는지, 응답이 `Content-Type: application/octet-stream`·`Content-Disposition: attachment`인지 확인.
 - **오탐 신고**: Google Search Console에 도메인 등록 → 보안 문제 확인·검토 요청, Safe Browsing 오탐 신고(https://safebrowsing.google.com/safebrowsing/report_error/).
