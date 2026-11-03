@@ -81,6 +81,87 @@ class DistributionTests(unittest.TestCase):
             self.assertIn(f'"{r}"', app)
 
 
+class MsixTests(unittest.TestCase):
+    """2.0.1 Microsoft Store(MSIX 방식): Store가 다시 서명하므로 인증서 없이 낼 수 있고, Store판으로 표시된다."""
+
+    def manifest(self, identity=None):
+        import xml.dom.minidom
+
+        import build_installer
+        ident = identity or build_installer.msix_identity()
+        return xml.dom.minidom.parseString(build_installer.msix_manifest("2.0.1", ident).encode("utf-8"))
+
+    def test_manifest_is_a_full_trust_desktop_app(self):
+        doc = self.manifest()
+        app = doc.getElementsByTagName("Application")[0]
+        self.assertEqual(app.getAttribute("Executable"), "PostechChat.exe")
+        self.assertEqual(app.getAttribute("EntryPoint"), "Windows.FullTrustApplication")
+        self.assertEqual(doc.getElementsByTagName("Identity")[0].getAttribute("Version"), "2.0.1.0")
+        self.assertEqual(doc.getElementsByTagName("Identity")[0].getAttribute("ProcessorArchitecture"), "x64")
+        caps = [e.getAttribute("Name") for e in doc.getElementsByTagName("Capabilities")[0].childNodes if e.nodeType == 1]
+        self.assertIn("runFullTrust", caps)
+        self.assertIn("microphone", caps)    # PO노트 녹음
+        self.assertEqual(doc.getElementsByTagName("desktop:ExecutionAlias")[0].getAttribute("Alias"), "poschat.exe")
+
+    def test_identity_comes_from_partner_center_values_and_is_escaped(self):
+        import build_installer
+
+        env = {"MSIX_IDENTITY_NAME": "12345PIDSTech.POSCHAT", "MSIX_PUBLISHER": 'CN=1A2B-3C, O="A & B"',
+               "MSIX_PUBLISHER_DISPLAY_NAME": "PIDS <Tech>"}
+        with patch.dict(os.environ, env):
+            doc = self.manifest(build_installer.msix_identity())
+        ident = doc.getElementsByTagName("Identity")[0]
+        self.assertEqual(ident.getAttribute("Name"), "12345PIDSTech.POSCHAT")
+        self.assertEqual(ident.getAttribute("Publisher"), 'CN=1A2B-3C, O="A & B"')
+        self.assertEqual(doc.getElementsByTagName("PublisherDisplayName")[0].firstChild.data, "PIDS <Tech>")
+        with patch.dict(os.environ, {"MSIX_IDENTITY_NAME": "", "MSIX_PUBLISHER": "  "}):
+            self.assertEqual(build_installer.msix_identity()["publisher"], "CN=POSCHAT Test")   # 시험용
+
+    def test_store_requires_the_last_version_part_to_be_zero(self):
+        import build_installer
+
+        self.assertEqual(build_installer.msix_version(version.APP_VERSION), version.APP_VERSION + ".0")
+        for bad in ("2.0", "2.0.0.1", "2.0.x", "70000.0.0"):
+            with self.assertRaises(ValueError):
+                build_installer.msix_version(bad)
+
+    @unittest.skipUnless(importlib.util.find_spec("PIL"), "Pillow 없음")
+    def test_layout_marks_the_store_build_and_has_every_logo_the_manifest_names(self):
+        import build_installer
+
+        with tempfile.TemporaryDirectory() as d:
+            app = Path(d, "app")
+            (app / "_internal").mkdir(parents=True)
+            (app / "PostechChat.exe").write_bytes(b"MZ")
+            tpl = app / "_internal" / "docx" / "templates"
+            (tpl / "default-docx-template" / "_rels").mkdir(parents=True)
+            (tpl / "default-docx-template" / "_rels" / ".rels").write_text("<x/>", encoding="utf-8")
+            (tpl / "default.docx").write_bytes(b"PK")
+            layout = build_installer.msix_layout(app, Path(d, "msix"), "2.0.1", build_installer.msix_identity())
+            self.assertEqual((layout / "_internal" / "distribution.txt").read_text(encoding="utf-8"), "store\n")
+            self.assertFalse((app / "_internal" / "distribution.txt").exists())   # GitHub판 폴더는 그대로
+            # makeappx가 거절하는 OPC 예약 이름(python-docx의 풀어 둔 서식 원본)은 빼고, 앱이 쓰는 default.docx는 남긴다
+            self.assertFalse((layout / "_internal/docx/templates/default-docx-template").exists())
+            self.assertTrue((layout / "_internal/docx/templates/default.docx").is_file())
+            self.assertEqual(build_installer.msix_bad_names(layout), [])
+            self.assertEqual(build_installer.msix_bad_names(app), ["_internal/docx/templates/default-docx-template/_rels"])
+            text = (layout / "AppxManifest.xml").read_text(encoding="utf-8")
+            for ref in ("Assets\\StoreLogo.png", "Assets\\Square44x44Logo.png", "Assets\\Square150x150Logo.png"):
+                self.assertIn(ref, text)
+                self.assertTrue((layout / ref.replace("\\", "/")).is_file(), ref)
+            from PIL import Image
+            for name, size in build_installer.MSIX_LOGOS.items():
+                with Image.open(layout / "Assets" / name) as im:
+                    self.assertEqual(im.size, (size, size))
+
+    def test_unsigned_msix_is_not_published_to_releases(self):
+        workflow = (ROOT / ".github" / "workflows" / "build.yml").read_text(encoding="utf-8")
+        create = workflow[workflow.index("gh release create"):]
+        create = create[:create.index("--notes-file")]
+        self.assertNotIn(".msix", create)        # 서명하지 않은 MSIX는 Windows가 설치하지 않는다
+        self.assertIn("release/POSCHAT.msix", workflow)   # CI 산출물로 남겨 파트너 센터에 올린다
+
+
 class StoreUpdateTests(unittest.TestCase):
     def setUp(self):
         import main
