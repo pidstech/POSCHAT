@@ -388,6 +388,7 @@ class _Resampler:
 CONF_THRESHOLD = 0.8      # 로컬 신뢰도가 이보다 낮은 구간이 있으면 서버로 보정한다(잡음 섞은 측정에서 정한 값)
 REFINE_SECONDS = 120      # 서버 보정은 말 구간을 이만큼 모아 한 번에 보낸다(호출당 약 8크레딧이라 길게 모을수록 싸다)
 REFINE_MAX_WAIT = 300     # 말이 드문드문해도 이 시간(초)이 지나면 모은 만큼 보정한다
+BUDGET_RECHECK = 120      # 2.1.1: 예산 때문에 서버를 멈췄으면 이 간격(초)마다 크레딧을 다시 확인한다(무료 요청)
 GAP_SECONDS = 0.4         # 구간을 이어 붙일 때 사이에 넣는 무음
 
 
@@ -398,6 +399,9 @@ class LiveSession:
       그 안에 신뢰도가 낮은 구간이 있을 때만 서버가 음성과 초안을 대조해 고친다(on_refine).
     - 서버 엔진: 구간을 약 25초씩 모아 받아 적고, 실패하면 fallback(로컬)으로 다시 받아 적는다.
     - budget_ok()가 False이면(이번 주 남은 크레딧이 예산 아래) 서버를 쓰지 않고 로컬로만 받아 적는다.
+      2.1.1: 멈춘 동안에는 서버를 부르지 않아 크레딧 값이 새로 오지 않으므로, BUDGET_RECHECK초마다 budget_refresh()로
+      다시 확인한다. 예산이 돌아오면 다시 보정하고, 멈춘 동안 고치지 못한 구간도 다음 묶음에 함께 보낸다.
+      멈춤·다시 시작은 on_budget(True/False)로 알린다.
 
     on_segment({"id", "start", "end", "text", "conf", "src"})는 구간마다(초 단위, offset부터),
     on_refine(ids, 고친 글 목록 또는 이어 쓴 글)은 서버 보정마다, on_level(0~1, 말하는 중)은 1초에 몇 번,
@@ -405,10 +409,13 @@ class LiveSession:
     """
 
     def __init__(self, engine, on_segment, on_level=None, on_error=None, device=None, offset=0.0, fallback=None,
-                 refiner=None, on_refine=None, budget_ok=None, id_base=0):
+                 refiner=None, on_refine=None, budget_ok=None, id_base=0, budget_refresh=None, on_budget=None):
         self.engine, self.fallback, self.refiner = engine, fallback, refiner
         self._on_segment, self._on_level, self._on_error = on_segment, on_level, on_error
         self._on_refine, self._budget_ok = on_refine, budget_ok
+        self._budget_refresh, self._on_budget = budget_refresh, on_budget
+        self._budget_checked = None  # 마지막으로 크레딧을 다시 확인한 시각(monotonic). None은 아직 안 함
+        self.budget_paused = False
         self._device, self._offset = device, float(offset)
         self._audio = queue.Queue()
         self._jobs = queue.Queue()
@@ -418,7 +425,6 @@ class LiveSession:
         self._fed = 0  # 받은 소리(16kHz 샘플 수). 녹음 길이는 벽시계가 아니라 받은 소리로 잰다
         self._context = ""
         self._next_id = int(id_base)
-        self._budget_warned = False
         self._threads = []
         self.stats = {"segments": 0, "server_calls": 0, "skipped_batches": 0, "budget_skips": 0}
 
@@ -495,13 +501,37 @@ class LiveSession:
         self._jobs.put(None)
 
     def _budget(self):
-        """서버를 써도 되는지. 예산 아래면 한 번만 알린다."""
-        if self._budget_ok is None or self._budget_ok():
+        """서버를 써도 되는지. 멈출 때와 다시 시작할 때마다 알린다.
+
+        2.1.1: 예전에는 한 번 예산 아래로 보면(녹음 중 크레딧 '확인'으로 값이 바뀐 때 등) 서버를 부르지 않으니 크레딧 값이
+        새로 오지 않아 녹음이 끝날 때까지 보정이 멈췄고, 알림도 녹음마다 한 번뿐이었다. 이제 멈춘 동안 크레딧을 다시 확인한다."""
+        if self._budget_ok is None:
+            return True
+        ok = self._budget_ok()
+        if not ok and self._budget_refresh and (
+                self._budget_checked is None or time.monotonic() - self._budget_checked >= BUDGET_RECHECK):
+            self._budget_checked = time.monotonic()
+            try:
+                self._budget_refresh()
+            except Exception:
+                pass  # 확인하지 못하면 알던 값을 그대로 쓴다
+            ok = self._budget_ok()
+        if ok:
+            if self.budget_paused:
+                self.budget_paused = False
+                if self._on_budget:
+                    self._on_budget(False)
             return True
         self.stats["budget_skips"] += 1
-        if not self._budget_warned and self._on_error:
-            self._budget_warned = True
-            self._on_error("이번 주 남은 크레딧이 예산 아래라 서버를 쓰지 않고 로컬 AI로만 받아 적습니다.")
+        if not self.budget_paused:
+            self.budget_paused = True
+            if self._budget_checked is None:
+                self._budget_checked = time.monotonic()
+            if self._on_budget:
+                self._on_budget(True)
+            if self._on_error:
+                self._on_error("이번 주 남은 크레딧이 예산 아래라 서버 보정을 멈추고 로컬 AI로만 받아 적습니다. "
+                               "크레딧을 2분마다 다시 확인해 예산이 돌아오면 다시 보정합니다(PO노트 → 음성 인식 설정 → 크레딧 예산 보호).")
         return False
 
     def _emit(self, begin, end, text, conf, src):
@@ -576,11 +606,14 @@ class LiveSession:
         np = self._segmenter._np
         gap = np.zeros(int(GAP_SECONDS * SAMPLE_RATE), dtype=np.float32)
         done = False
+        carry = []  # 예산 때문에 고치지 못한 구간: 다음 묶음에 함께 보낸다
         while not done:
             job = self._refine_jobs.get()
             if job is None:
                 return
-            batch, speech, since = [job], len(job[1]), time.monotonic()
+            batch, since = carry + [job], time.monotonic()
+            carry = []
+            speech = sum(len(s) for _, s in batch)
             while speech < REFINE_SECONDS * SAMPLE_RATE:
                 wait = REFINE_MAX_WAIT - (time.monotonic() - since)
                 if wait <= 0:
@@ -598,6 +631,10 @@ class LiveSession:
                 self.stats["skipped_batches"] += 1  # 로컬이 모두 확신한다: 크레딧을 쓰지 않는다
                 continue
             if not self._budget():
+                # 묶음 하나(약 2분) 분량까지만 남겨 둔다. 오래 멈추면 앞의 구간은 로컬 글 그대로 둔다
+                while batch and sum(len(s) for _, s in batch) > REFINE_SECONDS * SAMPLE_RATE:
+                    batch.pop(0)
+                carry = batch
                 continue
             samples = np.concatenate(sum([[s, gap] for _, s in batch], [])[:-1])
             self.stats["server_calls"] += 1

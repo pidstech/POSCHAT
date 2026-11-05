@@ -194,7 +194,7 @@ function recorderCard(st) {
     onclick: () => (mine ? stopRecording() : startRecording()) },
     h("span", { class: "po-rec-icon" }), mine ? (rec.stopping ? "마무리 중…" : "녹음 정지") : (note.duration ? "이어서 녹음" : "녹음 시작"));
   const elapsed = mine ? PO.live.elapsed || note.duration : note.duration;
-  const engine = mine ? rec.engine : (ENGINE_LABELS[st.engine] || "");
+  const engine = mine ? recEngineLabel(rec) : (ENGINE_LABELS[st.engine] || "");
   return h("div", { class: "po-card po-rec" },
     btn,
     h("span", { class: "po-clock", id: "po-clock" }, fmtClock(elapsed)),
@@ -202,6 +202,11 @@ function recorderCard(st) {
     h("span", { class: "po-rec-note", id: "po-rec-note" },
       other ? "다른 강의를 녹음하고 있습니다." : mine ? (PO.live.speaking ? "🗣 말하는 중 · " : "듣는 중 · ") + engine : engine),
     h("button", { class: "btn", onclick: showPoSettings, disabled: mine }, "음성 인식 설정"));
+}
+
+/* 녹음 중 엔진 표시. 예산 보호로 서버 보정을 멈췄으면 그렇다고 함께 보인다(2.1.1) */
+function recEngineLabel(rec) {
+  return rec.engine + (rec.budget_paused ? " · 서버 보정 멈춤(크레딧 예산 보호, 2분마다 다시 확인)" : "");
 }
 
 async function startRecording() {
@@ -522,7 +527,7 @@ function poEvent(ev) {
       const clock = $("#po-clock");
       if (clock) clock.textContent = fmtClock(ev.elapsed);
       const status = $("#po-rec-note");
-      if (status && recording()) status.textContent = (ev.speaking ? "🗣 말하는 중 · " : "듣는 중 · ") + recording().engine;
+      if (status && recording()) status.textContent = (ev.speaking ? "🗣 말하는 중 · " : "듣는 중 · ") + recEngineLabel(recording());
       break;
     }
     case "segment": {
@@ -552,6 +557,14 @@ function poEvent(ev) {
       const top = pane.scrollTop, atBottom = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 80;
       renderPo();
       pane.scrollTop = atBottom ? pane.scrollHeight : top;
+      break;
+    }
+    case "budget": {
+      // 2.1.1: 크레딧 예산 보호로 서버 보정을 멈추거나 다시 시작했다(녹음 중 표시에 남긴다)
+      const rec = recording();
+      if (rec && rec.note_id === ev.note_id) rec.budget_paused = !!ev.paused;
+      if (!ev.paused) toast("크레딧 예산이 돌아와 서버 보정을 다시 시작합니다.");
+      if (PO.open && here) renderPo();
       break;
     }
     case "status":
