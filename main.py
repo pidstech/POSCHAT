@@ -886,16 +886,19 @@ class Bridge(WorkspaceApi, BrowserApi, PaperApi, CodeApi, CodeAgentApi, SshApi, 
 
     # ---- 크레딧 ----
 
+    def _credit_url(self):
+        url = self._config.get("chat_completions_url") or api.DEFAULT_CHAT_COMPLETIONS_URL
+        if urlparse(url).hostname != urlparse(api.DEFAULT_CHAT_COMPLETIONS_URL).hostname:
+            url = api.DEFAULT_CHAT_COMPLETIONS_URL  # 다른 OpenAI 호환 서버를 쓰더라도 크레딧은 POSTECH에 묻는다
+        return url
+
     def get_credit(self):
         """POSTECH GenAI의 이번 주기 크레딧 사용량. 크레딧을 쓰지 않는 요청으로 확인한다."""
         key = self._postech_key()
         if not key:
             return {"ok": False, "error": "POSTECH GenAI API 키를 먼저 입력하세요."}
-        url = self._config.get("chat_completions_url") or api.DEFAULT_CHAT_COMPLETIONS_URL
-        if urlparse(url).hostname != urlparse(api.DEFAULT_CHAT_COMPLETIONS_URL).hostname:
-            url = api.DEFAULT_CHAT_COMPLETIONS_URL  # 다른 OpenAI 호환 서버를 쓰더라도 크레딧은 POSTECH에 묻는다
         try:
-            return {"ok": True, **api.credit(key, url)}
+            return {"ok": True, **api.credit(key, self._credit_url())}
         except ApiError as e:
             return {"ok": False, "error": str(e)}
 
@@ -918,7 +921,8 @@ class Bridge(WorkspaceApi, BrowserApi, PaperApi, CodeApi, CodeAgentApi, SshApi, 
             "languages": stt.LANGUAGES,
             "has_key": bool(self._postech_key()),
             "recording": {"note_id": self._po_note, "elapsed": session.elapsed if session else 0,
-                          "engine": self._po_label if session else "", "stopping": self._po_stopping}
+                          "engine": self._po_label if session else "", "stopping": self._po_stopping,
+                          "budget_paused": bool(session and getattr(session, "budget_paused", False))}
             if self._po_note else None,
             "download": self._po_download,
             "generating": self._po_generating,
@@ -1093,7 +1097,7 @@ class Bridge(WorkspaceApi, BrowserApi, PaperApi, CodeApi, CodeAgentApi, SshApi, 
             engines = self._po_engines(note_id)
             if engines["refiner"] or isinstance(engines["engine"], stt.ServerEngine):
                 try:
-                    api.credit(self._postech_key(), self._config.get("chat_completions_url") or None)  # 예산 판단용(무료)
+                    api.credit(self._postech_key(), self._credit_url())  # 예산 판단용(무료). 크레딧 '확인' 버튼과 같은 곳에 묻는다
                 except ApiError:
                     pass
         except (po_note.NoteError, stt.SttError) as e:
@@ -1126,11 +1130,18 @@ class Bridge(WorkspaceApi, BrowserApi, PaperApi, CodeApi, CodeAgentApi, SshApi, 
                 last_error[0] = time.monotonic()
                 self._po_push("error", note_id=note_id, error=message)
 
+        def on_budget(paused):
+            self._po_push("budget", note_id=note_id, paused=bool(paused))
+
+        def budget_refresh():
+            api.credit(self._postech_key(), self._credit_url())  # on_credit으로 self._credit이 바뀐다(무료 요청)
+
         device = self._config.get("po_device", "")
         session = stt.LiveSession(engines["engine"], on_segment, on_level, on_error,
                                   device=device if device != "" else None, offset=meta.get("duration", 0),
                                   fallback=engines["fallback"], refiner=engines["refiner"], on_refine=on_refine,
-                                  budget_ok=self._po_budget_ok, id_base=po_note.next_segment_id(note_id))
+                                  budget_ok=self._po_budget_ok, id_base=po_note.next_segment_id(note_id),
+                                  budget_refresh=budget_refresh, on_budget=on_budget)
         try:
             session.start()
         except stt.SttError as e:
