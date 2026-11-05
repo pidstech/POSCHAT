@@ -65,14 +65,20 @@ class BudgetRecoveryTests(unittest.TestCase):
         self.assertEqual(sum("예산" in n for n in self.notes), 2)
 
     def test_refresh_is_rate_limited(self):
+        # 부팅한 지 얼마 안 된 PC(monotonic이 120초보다 작다)에서도 처음 멈출 때 바로 다시 확인해야 한다
+        clock = [30.0]
         calls = []
         s = self.session(lambda: False, lambda: calls.append(1))
-        for _ in range(5):
+        with patch.object(stt.time, "monotonic", lambda: clock[0]):
+            for _ in range(5):
+                s._budget()
+            self.assertEqual(len(calls), 1)  # 처음 멈출 때 한 번 다시 확인하고, 그 뒤로는 BUDGET_RECHECK마다
+            clock[0] += stt.BUDGET_RECHECK - 1
             s._budget()
-        self.assertEqual(len(calls), 1)  # 처음 멈출 때 한 번 다시 확인하고, 그 뒤로는 BUDGET_RECHECK마다
-        s._budget_checked -= stt.BUDGET_RECHECK
-        s._budget()
-        self.assertEqual(len(calls), 2)
+            self.assertEqual(len(calls), 1)
+            clock[0] += 1
+            s._budget()
+            self.assertEqual(len(calls), 2)
 
     def test_segments_skipped_while_paused_are_refined_after_resume(self):
         np = self.np

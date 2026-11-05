@@ -414,7 +414,7 @@ class LiveSession:
         self._on_segment, self._on_level, self._on_error = on_segment, on_level, on_error
         self._on_refine, self._budget_ok = on_refine, budget_ok
         self._budget_refresh, self._on_budget = budget_refresh, on_budget
-        self._budget_checked = 0.0
+        self._budget_checked = None  # 마지막으로 크레딧을 다시 확인한 시각(monotonic). None은 아직 안 함
         self.budget_paused = False
         self._device, self._offset = device, float(offset)
         self._audio = queue.Queue()
@@ -508,7 +508,8 @@ class LiveSession:
         if self._budget_ok is None:
             return True
         ok = self._budget_ok()
-        if not ok and self._budget_refresh and time.monotonic() - self._budget_checked >= BUDGET_RECHECK:
+        if not ok and self._budget_refresh and (
+                self._budget_checked is None or time.monotonic() - self._budget_checked >= BUDGET_RECHECK):
             self._budget_checked = time.monotonic()
             try:
                 self._budget_refresh()
@@ -524,7 +525,8 @@ class LiveSession:
         self.stats["budget_skips"] += 1
         if not self.budget_paused:
             self.budget_paused = True
-            self._budget_checked = time.monotonic()
+            if self._budget_checked is None:
+                self._budget_checked = time.monotonic()
             if self._on_budget:
                 self._on_budget(True)
             if self._on_error:
