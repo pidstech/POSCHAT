@@ -21,8 +21,6 @@
   --add-fg: #1a7f37;
   --del-bg: #fdecea;
   --del-fg: #b42318;
-  --beta-bg: #fff1c2;
-  --beta-fg: #7a4b00;
   --link: #1a6ef5;          /* 1.19.1 링크: 밝은 화면(더 선명한 파랑) */
   --link-visited: #8250df;  /* 다녀온 링크 */
   --shadow: 0 0 0 1px rgba(0,0,0,.04), 0 4px 16px rgba(0,0,0,.08);
@@ -48,8 +46,6 @@
     --add-fg: #6fdd8b;
     --del-bg: #3a1614;
     --del-fg: #ff8a80;
-    --beta-bg: #4a3a0c;
-    --beta-fg: #ffd866;
     --link: #a8d1ff;          /* 1.19.1 링크: 어두운 배경에서 잘 보이는 밝은 하늘색 */
     --link-visited: #d9c2ff;  /* 다녀온 링크: 밝은 연보라 */
     --shadow: 0 0 0 1px rgba(255,255,255,.06), 0 4px 16px rgba(0,0,0,.4);
@@ -120,17 +116,6 @@ svg { width: 18px; height: 18px; flex: none; }
 .sb-features .new-chat.po-entry { min-width: 0; gap: 7px; padding: 7px 8px; font-size: 13.5px; margin-top: 0; }
 .sb-features .new-chat svg { width: 17px; height: 17px; }
 .sb-label { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* 베타 기능 표식(PLMS). 사이드바 기능 묶음의 맨 아래 한 줄을 모두 쓰고 배지는 오른쪽 끝에 둔다 */
-.beta-badge {
-  flex: none; margin-left: 6px; padding: 0 7px; border-radius: 999px; font-size: 11px; font-weight: 700; line-height: 18px;
-  letter-spacing: .02em; background: var(--beta-bg); color: var(--beta-fg); border: 1px solid currentColor;
-}
-.sb-features .plms-entry { grid-column: 1 / -1; }
-.sb-features .plms-entry .beta-badge { margin-left: auto; }
-.plms-beta { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 10px; padding: 8px 10px; border-radius: 10px;
-  background: var(--beta-bg); color: var(--beta-fg); font-size: 13px; line-height: 1.5; }
-.plms-beta .beta-badge { margin-left: 0; margin-top: 1px; background: transparent; }
-h2 .beta-badge { vertical-align: middle; margin-left: 8px; }
 .group-title { font-size: 12px; font-weight: 600; color: var(--text-3); padding: 14px 10px 6px; }
 .thread {
   position: relative; display: flex; align-items: center;
@@ -401,11 +386,11 @@ h2 .beta-badge { vertical-align: middle; margin-left: 8px; }
 .field { margin: 14px 0; }
 .field label { display: block; font-weight: 600; margin-bottom: 6px; }
 .field small { display: block; color: var(--text-3); margin-top: 5px; line-height: 1.5; }
-.field input, .field select, .plms-save-form input {
+.field input, .field select {
   width: 100%; border: 1px solid var(--border); background: var(--bg); color: var(--text);
   border-radius: 10px; padding: 8px 12px; font: inherit; outline: none;
 }
-.field input:focus, .field select:focus, .plms-save-form input:focus { border-color: var(--text-3); }
+.field input:focus, .field select:focus { border-color: var(--text-3); }
 .row { display: flex; gap: 8px; align-items: center; }
 .row input { flex: 1; }
 
@@ -513,7 +498,6 @@ pre.bib div { white-space: pre-wrap; }
 
 /* ---------- 좁은 화면(휴대폰 앱) ---------- */
 .paper-sidebar-open { display: none; }
-.plms-pdf-canvas { display: block; max-width: 100%; height: auto; margin: 10px auto; background: white; }
 @media (max-width: 720px) {
   #app.collapsed .paper-sidebar-open { display: grid; }
   #app { height: 100vh; height: 100dvh; }
@@ -809,39 +793,6 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .report-form textarea { resize: vertical; }
 .report-form input[type=checkbox] { width: auto; margin: 0; }
 
-/* PLMS 수업·자료 화면 (1.18.5) */
-.plms-note { color: var(--text-3); font-size: 12.5px; margin: 6px 0; overflow-wrap: anywhere; }
-.plms-crumbs { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; min-width: 0; }
-.plms-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.plms-head h3 { margin: 6px 0; }
-.plms-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 0 12px; }
-.plms-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; margin: 8px 0 14px; }
-.plms-card { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; text-align: left; padding: 12px 14px; font: inherit;
-  background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 10px; cursor: pointer; }
-.plms-card:hover { background: var(--hover); }
-.plms-card-title { font-weight: 600; overflow-wrap: anywhere; }
-.plms-chip { display: inline-block; flex: none; font-size: 11.5px; line-height: 1; padding: 4px 8px; border-radius: 999px;
-  background: var(--bubble); color: var(--text-2); border: 1px solid var(--border); }
-.plms-chip.on { background: var(--add-bg); color: var(--add-fg); border-color: transparent; }
-.plms-filters { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 12px; }
-.plms-filter { font: inherit; font-size: 13px; padding: 5px 12px; border-radius: 999px; cursor: pointer;
-  background: var(--bg); color: var(--text-2); border: 1px solid var(--border); }
-.plms-filter:hover { background: var(--hover); }
-.plms-filter.on { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
-.plms-group { border: 1px solid var(--border); border-radius: 10px; margin: 0 0 8px; background: var(--bg); }
-.plms-group > summary { cursor: pointer; padding: 9px 12px; font-weight: 600; font-size: 13.5px; }
-.plms-group[open] > summary { border-bottom: 1px solid var(--border); }
-.plms-group > .plms-cards, .plms-group > .plms-text { margin: 8px; }
-.plms-rows { display: grid; }
-.plms-group .plms-rows { padding: 4px; }
-.plms-row { display: flex; align-items: center; gap: 10px; text-align: left; font: inherit; padding: 8px 10px; border: 0; border-radius: 8px;
-  background: transparent; color: var(--text); cursor: pointer; min-width: 0; }
-.plms-row:hover { background: var(--hover); }
-.plms-row .plms-chip { min-width: 3.4em; text-align: center; }
-.plms-row-title { overflow-wrap: anywhere; }
-.plms-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 45vh; overflow: auto; font: inherit; line-height: 1.6;
-  background: var(--bubble); border-radius: 10px; padding: 12px 14px; margin: 8px 0; }
-
 /* 1.19 사용량 그래프 */
 .usage-chart { margin: 4px 0 10px; }
 .usage-chart figcaption { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 6px; font-size: 13px; margin-bottom: 4px; }
@@ -865,9 +816,3 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .plugin-orig { margin: 2px 0 6px; font-size: 12.5px; color: var(--text-3); }
 .plugin-orig > summary { cursor: pointer; width: fit-content; }
 .plugin-orig p { margin: 4px 0 0; }
-
-/* 1.19 PLMS 창: 계정을 설정에 저장 */
-.plms-save { margin: 10px 0; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--bubble); font-size: 13.5px; }
-.plms-save-form { display: grid; gap: 8px; margin-top: 10px; }
-.plms-save-form[hidden] { display: none; }
-.plms-save-form .row { align-items: center; gap: 10px; }

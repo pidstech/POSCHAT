@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Beomjoon Kim
 # SPDX-License-Identifier: AGPL-3.0-only
 """1.19 공개 전 사용자 피드백(백엔드): 플러그인 한국어 설명, 사용량 그래프 자료, 시작 창 크기 설정,
-PLMS 창에서 계정 저장, 브라우저 막대의 '기본 브라우저로 열기'·닫기."""
+브라우저 막대의 '기본 브라우저로 열기'·닫기."""
 import ast
 import re
 import sys
@@ -102,18 +102,6 @@ class BridgeSettingsTests(unittest.TestCase):
         run_app = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "run_app")
         call = next(n for n in ast.walk(run_app) if isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "create_window")
         self.assertEqual({k.arg for k in call.keywords} >= {"maximized", "fullscreen"}, True)
-
-    def test_plms_save_account_requires_both_fields_and_enables_plms(self):
-        import plms
-        self.assertFalse(self.bridge.plms_save_account("student", "")["ok"])
-        self.assertFalse(self.bridge.plms_save_account("", "pw")["ok"])
-        res = self.bridge.plms_save_account(" student ", "pw-1")
-        self.assertTrue(res["ok"], res)
-        self.assertEqual(res["plms_username"], "student")
-        self.assertEqual(plms.saved_username(), "student")
-        self.assertTrue(storage.load_config().get("plms_enabled"))
-        self.assertNotIn("pw-1", (storage.CONFIG_PATH).read_text(encoding="utf-8"))
-        plms.clear_credentials()
 
 
 class BrowserToolbarTests(unittest.TestCase):

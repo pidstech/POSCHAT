@@ -187,6 +187,13 @@ class Bridge(WorkspaceApi, BrowserApi, PaperApi, CodeApi, CodeAgentApi, SshApi, 
             self._config["migrated_1_10"] = True
             self._config["backup_1_10"] = str(backup) if backup else ""
             changed = True
+        if not self._config.get("migrated_2_1"):
+            # 2.1: PLMS 연결과 자동 로그인을 없앴다. 예전에 저장한 학교 계정(OS 보안 저장소)과 연결 설정을 한 번 지운다.
+            import secret_store
+            secret_store.delete("plms_login")
+            self._config.pop("plms_enabled", None)
+            self._config["migrated_2_1"] = True
+            changed = True
         if changed:
             storage.save_config(self._config)
 
@@ -316,7 +323,6 @@ class Bridge(WorkspaceApi, BrowserApi, PaperApi, CodeApi, CodeAgentApi, SshApi, 
                     "env" if os.environ.get("NOTION_TOKEN") or os.environ.get("NOTION_API_KEY") else None),
                 "firecrawl_source": "settings" if self._config.get("firecrawl_key") else (
                     "env" if os.environ.get("FIRECRAWL_API_KEY") else None),
-                "plms_username": self._plms_saved_username(),  # 1.18.5 저장된 PLMS 아이디(비밀번호는 화면으로 보내지 않는다)
             },
             "data_dir": str(storage.APP_DIR),
             "version": APP_VERSION, "distribution": version.distribution(),
@@ -409,46 +415,6 @@ class Bridge(WorkspaceApi, BrowserApi, PaperApi, CodeApi, CodeAgentApi, SshApi, 
 
     # ---- 설정 ----
 
-    @staticmethod
-    def _plms_saved_username():
-        try:
-            import plms
-            return plms.saved_username()
-        except Exception:
-            return ""
-
-    @staticmethod
-    def _save_plms_account(settings):
-        """1.18.5 설정의 PLMS 계정(OS 보안 저장소). 오류 글을 돌려주고, 잘 됐으면 None."""
-        import plms
-        try:
-            if settings.get("clear_plms"):
-                plms.clear_credentials()
-                return None
-            username = str(settings.get("plms_username") or "").strip()
-            password = str(settings.get("plms_password") or "")
-            if not username and not password:
-                return None
-            if username and not password and username == plms.saved_username():
-                return None  # 아이디만 그대로: 저장된 비밀번호를 유지한다
-            plms.save_credentials(username, password)
-        except plms.PlmsError as e:
-            return str(e)
-        return None
-
-    def plms_save_account(self, username, password):
-        """1.19 PLMS 창의 '설정에 계정 저장': 설정 창의 PLMS 계정 칸과 같은 곳(OS 보안 저장소)에 저장하고 연결을 켠다."""
-        username, password = str(username or "").strip(), str(password or "")
-        if not username or not password:
-            return {"ok": False, "error": "POSTECH 아이디와 비밀번호를 모두 입력하세요."}
-        error = self._save_plms_account({"plms_username": username, "plms_password": password})
-        if error:
-            return {"ok": False, "error": error}
-        with self._lock:
-            self._config["plms_enabled"] = True
-            storage.save_config(self._config)
-        return {"ok": True, "plms_username": self._plms_saved_username()}
-
     def save_settings(self, settings):
         mode = settings.get("api_mode", self._mode())
         url = api.endpoint_url(settings.get("responses_url", self._config.get("responses_url", "")),
@@ -460,13 +426,8 @@ class Bridge(WorkspaceApi, BrowserApi, PaperApi, CodeApi, CodeAgentApi, SshApi, 
             return {"ok": False, "error": "Responses API를 선택했다면 올바른 HTTPS 주소를 입력해야 합니다."}
         if mode == "chat_completions" and compatible_url and not self._valid_https_url(compatible_url):
             return {"ok": False, "error": "OpenAI 호환 API를 선택했다면 올바른 HTTPS Chat Completions 주소를 입력해야 합니다."}
-        plms_error = self._save_plms_account(settings)
-        if plms_error:
-            return {"ok": False, "error": plms_error}
         with self._lock:
             before = self._sync_settings()
-            if str(settings.get("plms_username") or "").strip() and settings.get("plms_password"):
-                self._config["plms_enabled"] = True  # 1.18.6 계정을 저장하면 PLMS 연결도 켠다(에이전트가 바로 조회)
             if settings.get("api_key"):
                 self._config["api_key"] = settings["api_key"].strip()
             if settings.get("clear_key"):
@@ -1403,9 +1364,6 @@ class Bridge(WorkspaceApi, BrowserApi, PaperApi, CodeApi, CodeAgentApi, SshApi, 
             on_ai_memory_state=save_ai_memory_state,
             policy=connectors.Policy(dict(self._config)),
             browser=browser,
-            plms=bool(self._config.get("plms_enabled")) and not block_tools,
-            # 1.18.6: 브라우저를 열지 않아도 채팅의 에이전트가 PLMS를 조회한다(숨은 웹 뷰·자동 로그인)
-            plms_reader=lambda action, **kwargs: self._plms_read(action, cancelled=lambda: not alive(), **kwargs),
             paper=self._paper_for_agent(),
             # 1.15: Code 화면이 열려 있으면 파일 수정은 승인 창 대신 Code 화면의 변경 검토(덩어리별)로
             review=lambda *a: self._code_review_edit(thread_id, alive, workspace, *a, session_allow=run["allow"]),

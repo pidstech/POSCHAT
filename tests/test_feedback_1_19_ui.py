@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Beomjoon Kim
 # SPDX-License-Identifier: AGPL-3.0-only
 """1.19 공개 전 사용자 피드백 화면 시험: 시작 창 크기 설정, 사용법 가이드 카드·제목, 사용량 그래프,
-어두운 화면의 링크 색과 다녀온 링크, PLMS 창에서 계정 저장, 브라우저 막대의 버튼 위치.
+어두운 화면의 링크 색과 다녀온 링크, 브라우저 막대의 버튼 위치.
 
 Playwright가 없으면 건너뛴다. POSTECH_UI_SHOTS 폴더가 주어지면 스크린숏을 남긴다.
 """
@@ -140,36 +140,6 @@ class FeedbackUiTests(unittest.TestCase):
                 self.assertEqual(errors, [])
             finally:
                 browser.close()
-
-    def test_plms_dialog_saves_the_account_to_settings(self):
-        import plms
-        from playwright.sync_api import sync_playwright
-
-        plms.clear_credentials()
-        with sync_playwright() as p:
-            browser, page, errors = self.page(p)
-            try:
-                self.close_modals(page)
-                page.evaluate("document.querySelector('#btn-plms').hidden = false")
-                page.click("#btn-plms")
-                page.wait_for_selector(".plms-save")
-                self.assertFalse(page.is_visible(".plms-save-form"))
-                page.click(".plms-save button:has-text('계정을 설정에 저장해 두기')")
-                page.fill(".plms-save-form input[type=text]", "student")
-                page.click(".plms-save-form button[type=submit]")
-                page.wait_for_selector(".plms-save-form small[role=status]:has-text('모두 입력')")
-                page.fill(".plms-save-form input[type=password]", "pw-1234")
-                self.shot(page, "plms-save")
-                page.click(".plms-save-form button[type=submit]")
-                page.wait_for_selector("#modal-root .modal:has-text('저장된 계정(student)')")
-                self.assertEqual(page.locator(".plms-save").count(), 0)
-                self.assertEqual(plms.saved_username(), "student")
-                self.assertTrue(self.bridge._config.get("plms_enabled"))
-                self.assertEqual(self.bridge.get_state()["config"]["plms_username"], "student")
-                self.assertEqual(errors, [])
-            finally:
-                browser.close()
-                plms.clear_credentials()
 
     def test_tool_pages_keep_the_sidebar_and_native_browser_toolbar_hides_duplicates(self):
         from playwright.sync_api import sync_playwright

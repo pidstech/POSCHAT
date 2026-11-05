@@ -102,7 +102,7 @@ class SharedBigramsTests(unittest.TestCase):
     def test_same_count_as_set_intersection(self):
         import storage
 
-        texts = ["포항공대 PLMS 수업 공지를 확인해 줘", "Hello, World! 안녕-하세요 3.14", "", "a b c", "ABC abc 가나다라"]
+        texts = ["포항공대 수업 공지를 확인해 줘", "Hello, World! 안녕-하세요 3.14", "", "a b c", "ABC abc 가나다라"]
         for q_text in texts:
             q = storage._bigrams(q_text)
             for text in texts:
