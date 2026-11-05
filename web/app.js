@@ -951,8 +951,6 @@ window.onBackendEvent = (ev) => {
   } else if (ev.type === "credit") {
     S.credit = ev.credit;
     renderCredit();
-  } else if (ev.type === "plms") {
-    toast(ev.message);
   } else if (ev.type === "browser") {
     if (window.browserEvent) browserEvent(ev);
   } else if (ev.type === "code") {
@@ -1171,7 +1169,7 @@ function modal({ title, body, buttons = [], wide = false, onClose }) {
   root.append(backdrop);
   // 창 안의 첫 입력 칸(없으면 창 자체)에 초점을 둔다. 따로 초점을 옮기는 창(설정 등)은 그 뒤에 옮긴다.
   const first = [...box.querySelectorAll(".modal-body input:not([type=hidden]):not([disabled]), .modal-body select, .modal-body textarea")]
-    .find((el) => el.getClientRects().length);  // 접어 둔 칸(예: PLMS 계정 저장)은 건너뛴다
+    .find((el) => el.getClientRects().length);  // 접어 둔 칸은 건너뛴다
   box.tabIndex = -1;
   ((!isNarrow() && first) || box).focus({ preventScroll: true });  // 휴대폰에서는 키보드가 뜨지 않게 창에만
   return { close, box };
@@ -1243,9 +1241,6 @@ function showSettings() {
     : "firecrawl MCP 서버를 쓸 때만 필요합니다.";
   const firecrawl = h("input", { type: "password", placeholder: c.firecrawl_source ? "••••••••••••" : "fc-... (선택)", autocomplete: "off" });
   const clearFirecrawl = h("input", { type: "checkbox", style: "width:auto;margin:0 6px 0 0" });
-  const plmsUser = h("input", { type: "text", value: c.plms_username || "", placeholder: "POSTECH 아이디 (선택)", autocomplete: "off", spellcheck: false });
-  const plmsPass = h("input", { type: "password", placeholder: c.plms_username ? "••••••••••••" : "비밀번호 (선택)", autocomplete: "new-password" });
-  const clearPlms = h("input", { type: "checkbox", style: "width:auto;margin:0 6px 0 0" });
   const usageBox = usageView();
   const hist = h("input", { type: "number", min: 0, max: 200, value: c.history_messages });
   const steps = h("input", { type: "number", min: 1, max: 100, value: c.max_steps });
@@ -1458,13 +1453,6 @@ function showSettings() {
       c.firecrawl_source === "settings"
         ? h("label", { style: "display:flex;align-items:center;font-size:13px;margin-top:4px;cursor:pointer" }, clearFirecrawl, "저장된 키 지우기")
         : null),
-    h("div", { class: "field" }, h("label", {}, "PLMS 계정 (자동 로그인, 베타)"), plmsUser, plmsPass,
-      h("small", {}, c.plms_username ? "저장된 계정이 있습니다. 바꾸려면 새 아이디·비밀번호를 입력하세요. " : "",
-        "PLMS → SSO 로그인을 누르면 로그인 창에 자동으로 입력합니다. StonePASS 같은 2단계 인증은 직접 진행해야 합니다. ",
-        "비밀번호는 이 PC의 보안 저장소(Windows 자격 증명 관리자·macOS 키체인)에만 저장하며, AI·대화 기록·동기화로 보내지 않습니다."),
-      c.plms_username
-        ? h("label", { style: "display:flex;align-items:center;font-size:13px;margin-top:4px;cursor:pointer" }, clearPlms, "저장된 계정 지우기")
-        : null),
     h("div", { class: "field" }, h("label", { for: "window-mode" }, "시작할 때 창 크기"), windowMode,
       h("small", {}, "다음에 앱을 열 때부터 이 크기로 엽니다. 전체 화면에서는 창의 최소화·최대화·닫기 버튼이 숨으니 F11로 끄세요. 지금 창도 F11로 전체 화면을 켜고 끌 수 있습니다.")),
     h("div", { class: "field" }, h("label", {}, "업데이트"),
@@ -1544,7 +1532,6 @@ function showSettings() {
             update_check: autoUpdate.checked, developer_mode: devMode.checked, window_mode: windowMode.value,
             notion_token: notion.value.trim(), clear_notion: clearNotion.checked && !notion.value.trim(),
             firecrawl_key: firecrawl.value.trim(), clear_firecrawl: clearFirecrawl.checked && !firecrawl.value.trim(),
-            plms_username: plmsUser.value.trim(), plms_password: plmsPass.value, clear_plms: clearPlms.checked,
           });
           if (state.ok === false) return toast(state.error);
           applyState(state);
@@ -1842,20 +1829,6 @@ Claude Sonnet 5.5 기준으로 1크레딧은 입력 약 250토큰, 출력 약 75
 - **단가·손익분기**: 경량·프런티어 단가를 넣으면 요청마다 손익분기(경량 단가 ÷ 프런티어 단가가 이 값보다 작아야 경량이 쌈)를 계산해, 프런티어 직접이 더 싼 요청은 프런티어로 보냅니다. **프롬프트 캐싱**을 켜면 같은 앞부분의 입력 비용을 줄입니다.
 - **개발자 모드**(설정): 답변 아래 표시에 호출마다의 실제 토큰·캐시·손익분기·원본 JSON이, 사용량·진단에 개발자 데이터가 보입니다.
 - 안드로이드에서는 로컬 AI를 쓸 수 없습니다(자동 선택을 켜도 Cloud 모델만 고릅니다).`],
-  ["PLMS 수업·공지·자료 (베타)", `
-**베타 기능입니다.** 실제 학교 계정에서의 확인이 끝나지 않아 동작이 불안정할 수 있습니다. 왼쪽 맨 아래 **PLMS**(베타 표시)에서 엽니다.
-
-왼쪽 **PLMS → SSO 로그인**을 누르고 오른쪽 브라우저에서 POSTECH 계정과 StonePASS로 인증하세요. 다시 **PLMS → 내 수업 불러오기**를 누르면 **이번 학기 수업**이 먼저 나오고, 지난 학기 수업은 접힌 묶음에 있습니다.
-
-- **계정 저장(선택)**: 설정의 **PLMS 계정**에 아이디·비밀번호를 저장해 두면 브라우저를 열지 않고 백그라운드에서 로그인합니다. **채팅의 에이전트에게 PLMS 수업·공지·자료를 바로 물어봐도 됩니다**(에이전트 모드). StonePASS 같은 2단계 인증이 필요할 때만 오른쪽에 브라우저가 열리니 직접 진행하세요. 로그인이 거부되면 10분 동안은 자동으로 다시 시도하지 않습니다. 비밀번호는 이 PC의 보안 저장소(자격 증명 관리자·키체인)에만 저장하고 AI·대화 기록·동기화로 보내지 않습니다. 같은 로그인 화면에는 한 번만 보내므로 비밀번호가 틀려도 반복해서 시도하지 않습니다.
-- 수업 화면은 **공지·게시판·자료·과제** 칩으로 거르고, 주차·주제별로 묶여 보입니다.
-
-- 수업에서 공지 게시판·강의자료를 선택해 본문과 첨부 링크를 읽습니다. PDF는 쪽별로 미리 보고, PowerPoint는 설치된 호환 앱에서 열거나 내려받습니다. 자료는 20MB까지, 긴 글은 **이어서 읽기**로 읽습니다.
-- **에이전트에게 수업 정리 맡기기 / 이 자료 묻기**를 누르면 질문이 입력됩니다. 답변에는 연 자료와 아직 열지 않은 수업 항목 수가 표시됩니다. 단계 제한·읽기 오류 등으로 모든 자료를 확인하지 못할 수 있습니다. PLMS 조회는 작업 폴더 없이도 에이전트 모드에서 됩니다. 로그인 후 Code 작업 에이전트에서도 수업 자료를 조회할 수 있습니다.
-- 로그인 만료 시 다시 인증하세요. **연결 해제**는 조회 기능을 끄고 PLMS 전용 쿠키를 지웁니다. 학교 공통 SSO 세션과 기존 대화 기록은 유지됩니다.
-- 요청한 자료 내용은 선택한 AI 모델 서비스에 전달될 수 있습니다. 비밀번호·OTP·쿠키는 모델에 보내지 않습니다. 제출·출석·성적 변경과 외부 사이트 자료는 지원하지 않습니다.
-- Windows·macOS 네이티브 브라우저가 필요합니다. 학교 화면 변경이나 계정 권한에 따라 읽지 못하는 항목은 원문에서 확인하세요.
-`],
   ["브라우저 에이전트 (1.16)", `
 **브라우저**를 열어 둔 채 에이전트 모드에서 "이 사이트에서 ○○를 찾아 줘"처럼 맡기면, 에이전트가 페이지를 살펴보고(요소 목록) 누르기·입력·고르기·스크롤·기다리기·읽기·캡처를 직접 합니다.
 

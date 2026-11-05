@@ -321,33 +321,6 @@ class WKWebViewBackend:
             raise browser_mod.BrowserError(f"웹페이지를 읽지 못했습니다: {box['error']}")
         return str(box.get("result") or "")
 
-    def plms_cookies(self, origin, clear=False):
-        box, done = {}, threading.Event()
-
-        def receive(cookies):
-            matching = [c for c in cookies if "plms.postech.ac.kr" == str(c.domain()).lstrip(".")
-                        or "plms.postech.ac.kr".endswith("." + str(c.domain()).lstrip("."))]
-            if clear:
-                store = self.view.configuration().websiteDataStore().httpCookieStore()
-                pending = [c for c in matching if str(c.domain()).lstrip(".") == "plms.postech.ac.kr"]
-                remaining = [len(pending)]
-                def deleted():
-                    remaining[0] -= 1
-                    if remaining[0] == 0:
-                        done.set()
-                for cookie in pending:
-                    store.deleteCookie_completionHandler_(cookie, deleted)
-                if not pending:
-                    done.set()
-            else:
-                box["cookies"] = [{"name": str(c.name()), "value": str(c.value()), "path": str(c.path())} for c in matching]
-                done.set()
-
-        self._run(lambda: self.view.configuration().websiteDataStore().httpCookieStore().getAllCookies_(receive), wait=False)
-        if not done.wait(READ_TIMEOUT):
-            raise browser_mod.BrowserError("PLMS 세션을 읽지 못했습니다.")
-        return box.get("cookies", [])
-
     def screenshot(self):
         """보이는 웹페이지를 PNG로(1.16 브라우저 에이전트). 작업 스레드에서 부른다."""
         box, done = {}, threading.Event()

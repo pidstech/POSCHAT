@@ -41,7 +41,6 @@ POSCHAT은 PIDS Tech. 팀이 만들고 관리하는 비공식 프로젝트입니
 | GitHub 커넥터 | GitHub | 저장소·이슈·PR 조회와 사용자가 승인한 쓰기 |
 | Google Drive·Docs·Sheets·Slides·Gmail·Calendar 커넥터 | Google | 사용자가 요청한 파일·메일·일정 조회와 승인한 쓰기·전송 |
 | Google Drive 동기화 | Google Drive의 앱 전용 숨김 폴더 | 기기 사이에 맞출 데이터(암호화) |
-| PLMS 연결 | POSTECH PLMS | 사용자가 요청한 수강 목록·수업·공지·자료 조회. 로그인·2차 인증은 학교 웹페이지에서 직접 진행하며 쿠키는 로컬 브라우저 저장소와 조회 중 메모리에서만 사용합니다. 요청한 자료는 선택한 AI 모델에 전달될 수 있습니다 |
 | Notion·Firecrawl·Zotero 커넥터 | 각 서비스 | 사용자가 요청한 조회·쓰기 |
 | Langfuse 내보내기(기본 꺼짐) | 사용자가 넣은 Langfuse 주소 | 관측 메타데이터. '내용 포함'을 따로 켜면 질문·답변 앞부분(비밀·이메일은 가림) |
 | 외부 MCP 서버 | 사용자가 추가한 서버 | 그 서버의 도구에 넘긴 인자 |
