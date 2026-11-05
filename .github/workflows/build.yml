@@ -309,9 +309,13 @@ jobs:
 
       - name: System libraries
         # libportaudio2: 앱에 함께 넣는 PortAudio(PO노트 녹음). 나머지: Xvfb에서 Qt 창(xcb)을 띄워 보는 데 필요하다
+        # 2.2.0 첫 실행에서 apt가 18분 넘게 멈춘 적이 있어 시간 제한과 비대화식 설정을 둔다
+        timeout-minutes: 10
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libportaudio2 xvfb libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
+          sudo -E apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=120 update
+          sudo -E apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=120 install -y --no-install-recommends libportaudio2 xvfb libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
             libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 libegl1 libnss3 \
             libxcomposite1 libxdamage1 libxrandr2 libxtst6 libasound2 file
 
