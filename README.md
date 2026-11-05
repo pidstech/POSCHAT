@@ -45,6 +45,21 @@ Releases의 `POSCHAT-mac.dmg`를 받아 엽니다. Apple Silicon(M1 이후) 맥�
 
 대화 기록과 설정은 `~/Library/Application Support/PostechChat`에 저장됩니다. 에이전트의 `run` 단계는 macOS 셸(`/bin/sh`)로 실행됩니다. 제거는 응용 프로그램 폴더의 앱을 휴지통으로 옮기면 됩니다(대화 기록 폴더는 남습니다).
 
+### Linux (2.2부터)
+
+Releases의 `POSCHAT-linux-x86_64.AppImage`를 받습니다. x86_64(64비트 Intel·AMD) PC용이며 glibc 2.35 이상인 배포판(Ubuntu 22.04·Debian 12·Fedora 36 이후 등)에서 돕니다. 설치 과정은 없고 파일 하나로 실행합니다.
+
+1. 받은 파일을 원하는 곳(예: `~/Applications`)에 두고 실행 권한을 줍니다: `chmod +x POSCHAT-linux-x86_64.AppImage`
+2. 파일을 더블클릭하거나 `./POSCHAT-linux-x86_64.AppImage`로 실행합니다. 처음 실행하면 앱 메뉴에 POSCHAT이 등록됩니다(`~/.local/share/applications/poschat.desktop`. 끄려면 `POSCHAT_NO_DESKTOP_ENTRY=1`).
+3. 처음 실행하면 설정 창이 열립니다. POSTECH GenAI API 키를 입력하세요.
+
+- 실행이 안 되고 FUSE 관련 오류가 나면 `sudo apt install fuse3`(Fedora: `sudo dnf install fuse3`)로 FUSE를 설치하거나, `./POSCHAT-linux-x86_64.AppImage --appimage-extract-and-run`으로 실행하세요.
+- 대화 기록과 설정은 `~/.config/PostechChat`에 저장됩니다. 커넥터 토큰은 GNOME 키링·KWallet(Secret Service)에 두고, 없으면 앱 전용 파일에 둡니다.
+- 앱 창은 앱에 함께 들어 있는 Qt WebEngine으로 띄웁니다. 앱이 자기 화면만 열고 외부 웹페이지는 열지 않기 때문에 배포본에서는 Chromium 샌드박스를 끕니다(Ubuntu 24.04의 AppArmor 제한 때문). 켜려면 `QTWEBENGINE_DISABLE_SANDBOX=0`을 주고 실행하세요.
+- Linux에는 아직 앱 안 **브라우저** 화면이 없습니다. 나머지 기능(채팅·에이전트·PO노트·Code·Lab·MCP)은 같습니다.
+- 업데이트는 앱이 새 AppImage를 받아 서명을 확인한 뒤 지금 파일과 바꿉니다. 앱을 닫았다가 다시 열면 새 버전입니다. AppImage가 있는 폴더에 쓸 수 있어야 합니다.
+- 제거는 AppImage 파일과 `~/.local/share/applications/poschat.desktop`을 지우면 됩니다(대화 기록 폴더는 남습니다).
+
 ### 설치 문제 해결
 
 설치 중 오류나 지연이 발생하면 보안 제품의 알림과 설치 로그를 확인하세요. 조직에서 관리하는 PC는 관리자 정책을 따르세요.
@@ -373,7 +388,7 @@ POSTECH GenAI 서버의 모델은 자체 시스템 프롬프트 때문에 "사�
 | `storage.py` | 대화·설정 저장(`%APPDATA%\PostechChat`), memory.md·USER.md, 첨부 파일 폴더, 모델 API 사용량, 다른 대화 검색 |
 | `web/` | 화면(HTML/CSS/JS, marked·DOMPurify·KaTeX 포함). PO노트 화면은 `web/po.js` |
 | `tests/` | 단위 테스트(`python -m unittest discover -s tests`) |
-| `.github/workflows/build.yml` | 단위 테스트, Windows·macOS·Android 빌드와 플랫폼별 자가 진단, 태그 push 때 Release에 첨부 |
+| `.github/workflows/build.yml` | 단위 테스트, Windows·macOS·Linux 빌드와 플랫폼별 자가 진단, 태그 push 때 Release에 첨부 |
 | `android/` | 안드로이드 앱(Kotlin WebView + Chaquopy). 빌드할 때 저장소 최상위의 Python 모듈·`web/`·`skills/`를 복사해 넣고, `android_main.py`가 pywebview 대신 화면과 Python을 연결합니다. |
 | `certs.py` | 중간 인증서를 보내지 않는 서버를 위해 AIA로 중간 인증서를 받아 검증(Windows는 운영체제가 처리) |
 | `installer/installer.py` | 설치 프로그램(`--silent --dir=<경로> --no-desktop` 지원) |
@@ -400,6 +415,16 @@ py -3 -m venv .venv
 첫 실행의 설정 창에서 본인의 POSTECH GenAI API 키를 입력합니다. 또는 실행할 프로세스에 `POSTECH_GENAI_API_KEY` 환경 변수를 설정할 수 있습니다. 설정에 저장한 키가 환경 변수보다 우선합니다. `.env` 파일을 자동으로 읽는 기능은 없습니다. 프런트엔드는 정적 HTML/CSS/JavaScript이므로 npm 설치나 별도 웹 서버가 필요하지 않습니다.
 
 개발 중 브리지 디버깅은 `POSTECH_CHAT_DEBUG=1` 환경 변수를 설정해 켤 수 있습니다. `run.bat`은 사용 가능한 Python을 찾아 의존성을 설치하고 실행하는 편의 스크립트이며, 위의 가상환경 직접 실행 방법은 사용할 Python을 명확하게 고정합니다.
+
+Linux에서 소스로 실행할 때는 PortAudio(`sudo apt install libportaudio2`)가 필요하고, 화면은 requirements.txt가 설치하는 Qt WebEngine(PyQt6-WebEngine)으로 띄웁니다.
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python main.py
+```
+
+Linux AppImage는 `libportaudio2`와 [appimagetool](https://github.com/AppImage/appimagetool/releases)을 준비한 뒤 `APPIMAGETOOL=<appimagetool 경로> .venv/bin/python build_installer.py`로 빌드합니다(먼저 `pip install pyinstaller`). 결과는 `release/POSCHAT-linux-x86_64.AppImage`입니다. 빌드한 컴퓨터보다 glibc가 오래된 배포판에서는 돌지 않으므로 배포본은 CI가 Ubuntu 22.04에서 만듭니다. 진단: `--selftest`(결과는 `~/.config/PostechChat/selftest.txt`), `--window-check=<결과.json>`(앱 창을 열어 화면과 JS API가 붙는지 확인).
 
 설치 프로그램은 python.org Python(tcl/tk 포함)에서 다음과 같이 빌드합니다.
 
@@ -429,6 +454,7 @@ py -3 -m venv .venv
 - **자동 업데이트**(1.9.1부터): 앱이 시작할 때(6시간에 한 번) 업데이트 서버(`updates.UPDATE_BASE_URL`)의 `/api/releases/latest`로 최신 정식 릴리스를 확인합니다. 1.18.1 이하 앱은 GitHub를 확인하므로, 저장소를 비공개로 바꾸기 전에 1.18.2를 공개 저장소에서 릴리스해 한 번 받게 합니다. 새 버전이 있으면 릴리스 노트와 함께 알리고, **업데이트**를 누르면 이 기기용 파일(`POSCHAT-Setup.exe`·`POSCHAT-mac.dmg`·`POSCHAT.apk`, 1.11부터의 이름. 릴리스에는 1.9.1~1.10.0 앱을 위해 예전 이름 `PostechChat-*`도 함께 올립니다)을 받아 서버가 알려 준 크기·SHA-256(digest)과, 릴리스 CI가 만든 Ed25519 서명(`<파일>.sig`)을 앱에 들어 있는 공개키로 확인합니다. 서버 주소가 http이므로 서명이 없거나 맞지 않으면 설치하지 않습니다([보안](docs/security.md#업데이트-신뢰-모델)).
   - Windows: 설치 프로그램을 지금 설치 폴더로 열고 앱이 스스로 닫힙니다. 설치 프로그램에서 **설치**를 누르면 앱이 완전히 닫히기를 기다렸다가(1.11부터, 한 번만 누르면 됨) 대화·설정을 유지한 채 바뀝니다. 30초가 지나도 닫히지 않으면 강제로 종료할지 묻습니다.
   - macOS: 디스크 이미지를 엽니다. 앱을 끝낸 뒤 응용 프로그램 폴더로 끌어다 놓아 바꿉니다.
+  - Linux(2.2): 실행 중인 AppImage 파일을 새 파일로 바꿉니다. 앱을 다시 열면 새 버전입니다.
   - Android: 설치 화면을 엽니다(처음 한 번 "이 출처 허용"이 필요합니다).
   - 업데이트 서버가 응답하지 않으면 확인하지 못했다고만 알리고(시작할 때는 알리지 않음) 사용에는 지장이 없습니다.
   - **설정 → 업데이트**에서 시작할 때 확인을 끄거나 지금 확인할 수 있고, 알림 창에서 **이 버전 건너뛰기**를 고를 수 있습니다.

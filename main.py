@@ -89,6 +89,60 @@ def _extend_mac_path():
     os.environ["PATH"] = os.pathsep.join(current + [d for d in extra if d not in current])
 
 
+def _prepare_linux():
+    """2.2 Linux 배포본(AppImage): 창은 묶어 넣은 Qt WebEngine으로 띄우고, 음성 인식은 묶어 넣은 PortAudio를 쓴다."""
+    if not sys.platform.startswith("linux"):
+        return
+    os.environ.setdefault("PYWEBVIEW_GUI", "qt")   # 소스 실행은 설치된 GTK가 있으면 그것도 된다(pywebview가 대신 고른다)
+    os.environ.setdefault("QT_API", "pyqt6")
+    if not getattr(sys, "frozen", False):
+        return
+    base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+    # Chromium 샌드박스는 사용자 네임스페이스가 필요한데 Ubuntu 24.04 등은 AppArmor가 AppImage에서 이를 막아 창이 뜨지 않는다.
+    # 앱 창은 앱에 들어 있는 web/ 화면만 열고 외부 웹페이지는 열지 않으므로(Linux에는 브라우저 뷰가 없다) 배포본에서는 끈다.
+    # 사용자가 QTWEBENGINE_DISABLE_SANDBOX=0을 주면 그대로 둔다.
+    os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
+    portaudio = sorted(base.glob("libportaudio.so*"))
+    if portaudio:
+        # sounddevice는 ctypes.util.find_library("portaudio")로 찾는데, 묶은 앱에서는 시스템 경로만 본다
+        import ctypes.util
+        original = ctypes.util.find_library
+
+        def find_library(name):
+            return str(portaudio[0]) if name == "portaudio" else original(name)
+
+        ctypes.util.find_library = find_library
+    _register_desktop_entry()
+
+
+def _register_desktop_entry():
+    """AppImage를 처음 실행하거나 옮긴 뒤 실행하면 앱 메뉴(~/.local/share/applications)에 POSCHAT을 등록·갱신한다."""
+    appimage = os.environ.get("APPIMAGE")
+    if not appimage or os.environ.get("POSCHAT_NO_DESKTOP_ENTRY") == "1":
+        return
+    try:
+        data = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+        icon = data / "icons" / "hicolor" / "256x256" / "apps" / "poschat.png"
+        entry = data / "applications" / "poschat.desktop"
+        if any(c in appimage for c in '"`$\\\n'):
+            return   # .desktop의 Exec 따옴표 규칙에 걸리는 이름은 등록하지 않는다(메뉴 등록은 편의 기능)
+        exec_path = f'"{appimage}"'
+        text = ("[Desktop Entry]\nType=Application\nName=POSCHAT\nComment=POSTECH GenAI 채팅\n"
+                f"Exec={exec_path}\nIcon=poschat\nTerminal=false\nCategories=Office;Education;Chat;\n"
+                "StartupWMClass=POSCHAT\n")
+        if entry.is_file() and entry.read_text(encoding="utf-8") == text and icon.is_file():
+            return
+        source_icon = resource_dir() / "assets" / "icon.png"
+        if source_icon.is_file():
+            icon.parent.mkdir(parents=True, exist_ok=True)
+            import shutil
+            shutil.copyfile(source_icon, icon)
+        entry.parent.mkdir(parents=True, exist_ok=True)
+        entry.write_text(text, encoding="utf-8")
+    except OSError:
+        pass   # 메뉴 등록은 편의 기능이라 실패해도 앱은 연다
+
+
 def _installed_package_licenses():
     """설치된 Python 패키지가 함께 싣는 라이선스 파일(dist-info)."""
     from importlib import metadata
@@ -785,6 +839,9 @@ class Bridge(WorkspaceApi, BrowserApi, PaperApi, CodeApi, CodeAgentApi, SshApi, 
         platform = updates.current_platform()
         if platform == "windows":
             return bool(getattr(sys, "frozen", False))  # 소스로 실행 중이면 설치 프로그램으로 바꿀 것이 없다
+        if platform == "linux":
+            target = updates.appimage_path()   # 2.2: AppImage로 실행할 때만(소스·배포판 패키지는 바꿀 파일이 없다)
+            return bool(target) and os.access(target.parent, os.W_OK)
         return platform in ("macos", "android")
 
     def skip_update(self, version):
@@ -859,6 +916,14 @@ class Bridge(WorkspaceApi, BrowserApi, PaperApi, CodeApi, CodeAgentApi, SshApi, 
                 self._push({"type": "update", "kind": "installing", "version": version,
                             "message": "설치 프로그램을 열었습니다. 앱이 닫히면 설치 프로그램에서 '설치'를 누르세요."})
                 threading.Timer(2.0, self._close_for_update).start()
+            elif platform == "linux":
+                # 2.2: 서명을 확인한 새 AppImage로 실행 중인 AppImage 파일을 바꾼다. 지금 창은 옛 버전 그대로 돌고, 다시 열면 새 버전이다
+                target = updates.appimage_path()
+                if not target:
+                    raise updates.UpdateError("AppImage로 실행 중이 아니라 바꿀 파일이 없습니다. Releases 페이지에서 받으세요.")
+                updates.replace_appimage(path, target)
+                self._push({"type": "update", "kind": "opened", "version": version,
+                            "message": f"{version}(으)로 바꿨습니다. POSCHAT을 닫았다가 다시 열면 새 버전이 실행됩니다."})
             else:
                 open_path(path)
                 message = ("Android 설치 화면에서 업데이트를 승인하세요." if platform == "android" else
@@ -1581,6 +1646,40 @@ def selftest():
     (storage.APP_DIR / "selftest.txt").write_text("\n".join(lines), encoding="utf-8")
 
 
+def window_check(path):
+    """배포본 진단(--window-check=<파일>): 실제 앱 화면을 창으로 열어 화면과 JS API(pywebview)가 붙는지 보고 결과를 JSON으로 쓴다.
+    2.2 Linux AppImage는 묶어 넣은 Qt WebEngine으로 창을 띄우므로 CI가 가상 화면(Xvfb)에서 이것으로 확인한다."""
+    bridge = Bridge()
+    index = resource_dir() / "web" / "index.html"
+    window = webview.create_window(APP_TITLE, url=str(index), js_api=bridge, width=1000, height=700)
+    result = {"version": APP_VERSION, "ok": False}
+
+    def probe():
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            try:
+                state = window.evaluate_js("[document.readyState, document.title, typeof (window.pywebview && window.pywebview.api)]")
+                if state and state[0] == "complete" and state[2] == "object":
+                    result.update(ok=True, title=state[1], api=state[2])
+                    break
+                result["last"] = state
+            except Exception as e:
+                result["error"] = f"{type(e).__name__}: {e}"
+            time.sleep(0.5)
+        try:
+            result["gui"] = getattr(webview, "guilib", None).__name__ if getattr(webview, "guilib", None) else None
+        except Exception:
+            pass
+        Path(path).write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+        window.destroy()
+
+    try:
+        webview.start(probe)
+    finally:
+        bridge._mcp.shutdown()
+    os._exit(0 if result["ok"] else 1)   # 작업 스레드를 기다리지 않는다
+
+
 def uninstall(quiet=False):
     """설치 프로그램이 등록한 제거 명령(PostechChat.exe --uninstall). 대화 기록·설정은 남긴다."""
     import ctypes
@@ -1637,6 +1736,7 @@ def _log_crash():
 
 def main():
     _extend_mac_path()
+    _prepare_linux()
     verify = next((a for a in sys.argv if a.startswith("--verify-install=")), None)
     if verify:
         # 설치 프로그램이 새 버전을 바꾼 뒤 부른다: 여기까지 왔으면 파이썬 DLL과 앱 코드를 모두 불러온 것이다
@@ -1650,6 +1750,8 @@ def main():
             office_mcp.serve(sys.argv[i + 1] if i + 1 < len(sys.argv) else "")
         elif "--selftest" in sys.argv:
             selftest()
+        elif any(a.startswith("--window-check=") for a in sys.argv):
+            window_check(next(a for a in sys.argv if a.startswith("--window-check=")).split("=", 1)[1])
         elif "--uninstall" in sys.argv:
             uninstall(quiet="--quiet" in sys.argv)
         else:

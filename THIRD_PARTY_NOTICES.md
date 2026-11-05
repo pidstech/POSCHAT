@@ -74,6 +74,9 @@ document reading and the built-in Office MCP servers:
 | keyring, jaraco.classes/context/functools, more-itertools | Connector tokens in the OS credential store | MIT |
 | pywebview, bottle, proxy_tools | Desktop window | BSD-3-Clause, MIT, MIT |
 | pythonnet, clr_loader (Windows) / pyobjc (macOS) | pywebview platform backends | MIT |
+| PyQt6, PyQt6-WebEngine, PyQt6-sip (Linux) | pywebview Qt backend for the Linux AppImage | GPL-3.0-only (Riverbank Computing) |
+| Qt 6 and Qt WebEngine (Linux, bundled in the PyQt6 wheels; includes Chromium) | Desktop window and web engine for the Linux AppImage | LGPL-3.0-only (Chromium: BSD-3-Clause and others) |
+| QtPy (Linux) | Qt binding abstraction used by pywebview | MIT |
 | CPython | The bundled Python interpreter | PSF-2.0 |
 | pywinpty (Windows) | Code terminal pseudo console (ConPTY; bundles winpty and Microsoft's OpenConsole/conpty) | MIT |
 | paramiko | SSH connection for remote work folders in the Code screen | LGPL-2.1-or-later |
@@ -83,6 +86,11 @@ document reading and the built-in Office MCP servers:
 The desktop builds copy the license and notice files that each bundled
 Python package ships into `licenses/python/<package>-<version>/` inside the
 app. The app shows all of them under Settings → Third-party licenses.
+
+The Linux AppImage combines POSCHAT (AGPL-3.0-only) with PyQt6 (GPL-3.0),
+as section 13 of both licenses permits. Qt and Qt WebEngine are used
+unmodified as shared libraries from the PyQt6 wheels on PyPI; they can be
+replaced by rebuilding the AppImage with `build_installer.py`.
 
 paramiko is used unmodified, as published on PyPI. Because POSCHAT itself is
 free software (AGPL-3.0-only) with its complete source and build scripts

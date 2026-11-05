@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Beomjoon Kim
 # SPDX-License-Identifier: AGPL-3.0-only
-"""대화 스레드와 설정을 %APPDATA%\\PostechChat(맥은 ~/Library/Application Support/PostechChat) 아래에 JSON으로, 메모리와 사용자 정보를 Markdown으로 저장한다."""
+"""대화 스레드와 설정을 %APPDATA%\\PostechChat(맥은 ~/Library/Application Support/PostechChat, Linux는 ~/.config/PostechChat) 아래에 JSON으로, 메모리와 사용자 정보를 Markdown으로 저장한다."""
 import hashlib
 import json
 import os
