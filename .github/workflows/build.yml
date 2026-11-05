@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 name: Build installer
 
-# PR과 수동 실행: Windows 설치 파일과 macOS 디스크 이미지를 빌드하고 자가 진단 뒤 결과물(artifact)로 올린다.
+# PR과 수동 실행: Windows 설치 파일, macOS 디스크 이미지, Linux AppImage(2.2)를 빌드하고 자가 진단 뒤 결과물(artifact)로 올린다.
 # 사용자 결정(2026-10-26): Android APK 빌드·에뮬레이터 시험·배포는 하지 않는다.
 # v로 시작하는 태그(예: v1.2.0)를 push하거나, 수동 실행 때 release에 태그 이름을 넣으면
 # 데스크톱 결과물을 그 태그의 GitHub Release에 첨부한다(수동 실행은 실행한 커밋에 태그를 만든다).
@@ -296,8 +296,84 @@ jobs:
           name: POSCHAT-mac
           path: release/POSCHAT-mac.dmg
 
+  linux:
+    # 2.2 Linux(x86_64) AppImage. 빌드한 곳보다 glibc가 오래된 배포판에서는 돌지 않으므로 지원하는 가장 오래된 러너(22.04)에서 만든다.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: System libraries
+        # libportaudio2: 앱에 함께 넣는 PortAudio(PO노트 녹음). 나머지: Xvfb에서 Qt 창(xcb)을 띄워 보는 데 필요하다
+        # 2.2.0 첫 실행에서 apt가 18분 넘게 멈춘 적이 있어 시간 제한과 비대화식 설정을 둔다
+        timeout-minutes: 10
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=120 update
+          sudo -E apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=120 install -y --no-install-recommends libportaudio2 xvfb libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
+            libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 libegl1 libnss3 \
+            libxcomposite1 libxdamage1 libxrandr2 libxtst6 libasound2 file
+
+      - name: appimagetool
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/appimagetool" \
+            https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+          echo "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  $RUNNER_TEMP/appimagetool" | sha256sum -c
+          chmod +x "$RUNNER_TEMP/appimagetool"
+          echo "APPIMAGETOOL=$RUNNER_TEMP/appimagetool" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt pyinstaller
+
+      - name: Build
+        run: python build_installer.py
+
+      - name: License files in the app
+        # 만든 AppImage를 풀어 그 안에 라이선스 전문·제3자 고지·패키지 라이선스가 들어 있는지 본다
+        run: |
+          app="$PWD/release/POSCHAT-linux-x86_64.AppImage"
+          cd "$RUNNER_TEMP" && "$app" --appimage-extract > /dev/null
+          python "$GITHUB_WORKSPACE/tools/license_check.py" package --python-licenses "$RUNNER_TEMP/squashfs-root"
+
+      - name: Self-test the built app
+        # FUSE가 없는 러너라서 AppImage를 풀어서 실행한다(사용자 PC에서는 그냥 실행된다)
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+          POSCHAT_NO_DESKTOP_ENTRY: "1"
+        run: |
+          file release/POSCHAT-linux-x86_64.AppImage
+          ./release/POSCHAT-linux-x86_64.AppImage --selftest
+          report="$HOME/.config/PostechChat/selftest.txt"
+          cat "$report"
+          version=$(python -c "from version import APP_VERSION; print(APP_VERSION)")
+          for want in "version: $version" "web: True" "documents: OK" "attachments: OK" "anthropic: OK" "word OK" "powerpoint OK" "excel OK" "paper OK" "notion OK" "firecrawl OK" "stt: OK" "crypto: OK" "rag: OK" "code: OK" "terminal: OK" "ssh: OK" "remote: OK" "lab-agents: OK" "github OK(19)" "research OK(12)" "memory OK(8)" "python OK(3)" "ssh OK(2)"; do
+            grep -qF "$want" "$report" || { echo "selftest에 '$want'이(가) 없습니다."; exit 1; }
+          done
+
+      - name: Open the app window (Qt WebEngine on Xvfb)
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+          POSCHAT_NO_DESKTOP_ENTRY: "1"
+          QT_QPA_PLATFORM: xcb
+        run: |
+          timeout 180 xvfb-run -a -s "-screen 0 1280x900x24" \
+            ./release/POSCHAT-linux-x86_64.AppImage --window-check="$RUNNER_TEMP/window.json" || status=$?
+          cat "$RUNNER_TEMP/window.json" || true
+          test "${status:-0}" = 0
+          python -c "import json, sys; r = json.load(open(sys.argv[1])); assert r['ok'] and r['api'] == 'object', r" "$RUNNER_TEMP/window.json"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: POSCHAT-linux
+          path: release/POSCHAT-linux-x86_64.AppImage
+
   publish:
-    needs: [release-tag, license, tests, ui, windows, macos, browser-spike]
+    needs: [release-tag, license, tests, ui, windows, macos, linux, browser-spike]
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release != '')
     runs-on: ubuntu-latest
     permissions:
@@ -322,7 +398,7 @@ jobs:
           TAG: ${{ inputs.release || github.ref_name }}
         run: |
           python -m pip install requests cryptography
-          python tools/update_sign.py sign --tag "$TAG" dist/POSCHAT-Setup.exe dist/POSCHAT-mac.dmg
+          python tools/update_sign.py sign --tag "$TAG" dist/POSCHAT-Setup.exe dist/POSCHAT-mac.dmg dist/POSCHAT-linux-x86_64.AppImage
 
       - name: Publish release
         env:
@@ -345,7 +421,8 @@ jobs:
           cp dist/POSCHAT-mac.dmg dist/PostechChat-mac.dmg
           # 1.18: POSCHAT-Store-Setup.exe는 Microsoft Store 제출용(파트너 센터에 이 버전의 주소를 넣는다). 앱의 자동 업데이트는 받지 않는다
           gh release create "$TAG" dist/POSCHAT-Setup.exe dist/POSCHAT-Store-Setup.exe dist/POSCHAT-mac.dmg \
-            dist/POSCHAT-Setup.exe.sig dist/POSCHAT-mac.dmg.sig \
+            dist/POSCHAT-linux-x86_64.AppImage \
+            dist/POSCHAT-Setup.exe.sig dist/POSCHAT-mac.dmg.sig dist/POSCHAT-linux-x86_64.AppImage.sig \
             dist/PostechChat-Setup.exe dist/PostechChat-mac.dmg \
             --repo "$GITHUB_REPOSITORY" --title "POSCHAT $TAG" --target "$GITHUB_SHA" \
             --notes-file notes.md --generate-notes

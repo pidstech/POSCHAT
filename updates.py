@@ -44,6 +44,7 @@ MAX_REDIRECTS = 5
 ASSETS = {
     "windows": "POSCHAT-Setup.exe",
     "macos": "POSCHAT-mac.dmg",
+    "linux": "POSCHAT-linux-x86_64.AppImage",   # 2.2: Linux(x86_64) AppImage
     "android": "POSCHAT.apk",
 }
 USER_AGENT = "POSCHAT"
@@ -63,7 +64,41 @@ def current_platform():
         return "macos"
     if sys.platform == "android" or hasattr(sys, "getandroidapilevel") or "ANDROID_ROOT" in os.environ:
         return "android"
+    if sys.platform.startswith("linux"):
+        import platform
+        return "linux" if platform.machine() in ("x86_64", "AMD64") else "unsupported"   # 배포본은 x86_64만 만든다
     return "unsupported"
+
+
+def appimage_path():
+    """AppImage로 실행 중이면 그 AppImage 파일의 경로(AppImage 런타임이 APPIMAGE에 넣어 준다). 아니면 None."""
+    value = os.environ.get("APPIMAGE")
+    if not value or not getattr(sys, "frozen", False):
+        return None
+    path = Path(value)
+    return path if path.is_file() else None
+
+
+def replace_appimage(new_file, target):
+    """내려받아 서명까지 확인한 AppImage(new_file)로 실행 중인 AppImage(target)를 바꾼다.
+
+    실행 중인 파일도 같은 폴더에서 이름을 바꿔 덮으면(os.replace) 지금 프로세스는 옛 파일을 계속 쓰고, 다음 실행부터 새 버전이
+    뜬다. 다른 파일 시스템에서 바로 옮기면 중간에 끊길 수 있으므로 target 옆에 먼저 복사한 뒤 바꾼다."""
+    import shutil
+    import stat
+
+    new_file, target = Path(new_file), Path(target)
+    staged = target.with_name(f".{target.name}.update")
+    try:
+        shutil.copyfile(new_file, staged)
+        mode = target.stat().st_mode if target.exists() else 0o755
+        os.chmod(staged, stat.S_IMODE(mode) | stat.S_IXUSR | stat.S_IRUSR)
+        os.replace(staged, target)
+    except OSError as e:
+        staged.unlink(missing_ok=True)
+        raise UpdateError(f"AppImage를 바꾸지 못했습니다({target.parent}에 쓸 수 있는지 확인하세요): {e}") from e
+    new_file.unlink(missing_ok=True)
+    return target
 
 
 def version_tuple(value):

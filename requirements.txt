@@ -4,6 +4,10 @@ truststore>=0.9
 cryptography>=42  # 동기화(sync.py)의 종단간 암호화(AES-256-GCM)
 keyring>=24  # 커넥터 토큰을 OS 보안 저장소(자격 증명 관리자·키체인)에 둔다. 없으면 앱 전용 파일
 pywebview>=5.0
+# 2.2 Linux: 창을 pip로 받는 Qt WebEngine으로 띄운다(배포판마다 다른 WebKitGTK에 기대지 않는다). PyQt6는 GPL-3.0, Qt는 LGPL-3.0
+PyQt6>=6.7; sys_platform == "linux"
+PyQt6-WebEngine>=6.7; sys_platform == "linux"
+qtpy>=2.4; sys_platform == "linux"
 comtypes>=1.2; sys_platform == "win32"  # 설치 프로그램의 바로가기 생성(빌드할 때만 필요)
 pywinpty>=3.0; sys_platform == "win32"  # 1.18 Code 화면 터미널(ConPTY). macOS·Linux는 표준 pty를 쓴다
 paramiko>=3.5  # 1.18 코드 화면의 SSH 원격 작업 폴더(ssh_remote.py). 안드로이드에는 없다

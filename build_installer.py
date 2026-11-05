@@ -6,7 +6,8 @@
 
 필요 패키지: requirements.txt와 pyinstaller (pip install -r requirements.txt pyinstaller)
 결과: Windows는 release/POSCHAT-Setup.exe와 release/POSCHAT-Store-Setup.exe(Microsoft Store 제출용, 1.18),
-macOS는 release/POSCHAT-mac.dmg(앱 아이콘을 위해 pillow도 필요)
+macOS는 release/POSCHAT-mac.dmg(앱 아이콘을 위해 pillow도 필요),
+Linux(x86_64)는 release/POSCHAT-linux-x86_64.AppImage(2.2. PortAudio(libportaudio2)와 appimagetool이 필요하다. build_linux 참고)
 빌드 중간 파일은 %TEMP%\\PostechChat-build 에 만든다(클라우드 동기화 폴더에서 빌드하면 느리다).
 
 1.11부터 앱 이름은 POSCHAT이다. 설치 폴더·실행 파일(PostechChat.exe, PostechChat.app)·데이터 폴더 이름은
@@ -31,6 +32,7 @@ SETUP_FILE = "POSCHAT-Setup.exe"
 STORE_SETUP_FILE = "POSCHAT-Store-Setup.exe"
 PE_SUFFIXES = (".exe", ".dll", ".pyd")
 DMG_FILE = "POSCHAT-mac.dmg"
+APPIMAGE_FILE = "POSCHAT-linux-x86_64.AppImage"
 WORK = Path(tempfile.gettempdir()) / "PostechChat-build"
 ICON = ROOT / "assets" / "icon.ico"
 ICON_PNG = ROOT / "assets" / "icon.png"
@@ -141,11 +143,93 @@ def build_mac():
     print(f"완료: {target} ({target.stat().st_size / 1024 / 1024:.1f} MB)")
 
 
+def _portaudio_library():
+    """시스템의 PortAudio 공유 라이브러리 경로. Linux의 sounddevice 패키지는 PortAudio를 싣지 않으므로 앱에 함께 넣는다."""
+    import ctypes.util
+    name = ctypes.util.find_library("portaudio")
+    if not name:
+        return None
+    if os.path.isabs(name):
+        return Path(name)
+    for folder in ("/usr/lib/x86_64-linux-gnu", "/usr/lib64", "/usr/lib", "/lib/x86_64-linux-gnu"):
+        if (Path(folder) / name).exists():
+            return (Path(folder) / name).resolve()
+    return None
+
+
+def _appimagetool():
+    """appimagetool 실행 경로: APPIMAGETOOL 환경 변수 또는 PATH."""
+    tool = os.environ.get("APPIMAGETOOL") or shutil.which("appimagetool") or shutil.which("appimagetool-x86_64.AppImage")
+    if not tool:
+        sys.exit("appimagetool을 찾지 못했습니다. https://github.com/AppImage/appimagetool/releases 에서 받아\n"
+                 "  APPIMAGETOOL=/경로/appimagetool-x86_64.AppImage python build_installer.py 로 실행하세요.")
+    return tool
+
+
+def build_linux():
+    """2.2: PostechChat 앱 폴더를 만들고 실행 파일 하나짜리 AppImage로 묶는다.
+
+    창은 pywebview의 Qt 방식(PyQt6-WebEngine, pip 패키지에 Qt가 함께 들어 있다)으로 띄워 배포판의 WebKitGTK에 기대지 않는다.
+    빌드한 컴퓨터보다 glibc가 오래된 배포판에서는 돌지 않으므로 CI는 ubuntu-22.04(glibc 2.35)에서 빌드한다."""
+    from version import APP_VERSION
+
+    portaudio = _portaudio_library()
+    if not portaudio:
+        sys.exit("PortAudio 라이브러리를 찾지 못했습니다. 예) sudo apt install libportaudio2")
+    tool = _appimagetool()
+
+    print("[1/2] 앱 빌드")
+    pyinstaller(
+        "--windowed", "--onedir", "--name", "PostechChat", *APP_DATA, *APP_EXCLUDES, *dependency_licenses(),
+        "--add-data", f"{ICON_PNG}{os.pathsep}assets",   # 앱 메뉴 등록(main._register_desktop_entry)에 쓰는 아이콘
+        "--add-binary", f"{portaudio}{os.pathsep}.",     # main._prepare_linux가 sounddevice에 이 파일을 알려 준다
+        # pywebview는 Qt 모듈을 qtpy를 거쳐 실행 중에 불러오므로 PyInstaller가 따라가지 못한다. Qt WebEngine까지 직접 알려 준다
+        *[x for name in ("webview.platforms.qt", "PyQt6.QtWebEngineWidgets", "PyQt6.QtWebEngineCore", "PyQt6.QtWebChannel",
+                         "PyQt6.QtNetwork", "PyQt6.QtPrintSupport")
+          for x in ("--hidden-import", name)],
+        "--collect-submodules", "qtpy",
+        "--exclude-module", "webview.platforms.gtk", "--exclude-module", "gi",   # 배포본은 Qt만 쓴다
+        "--distpath", str(WORK / "app"),
+        str(ROOT / "main.py"),
+    )
+    app_dir = WORK / "app" / "PostechChat"
+
+    print("[2/2] AppImage 만들기")
+    appdir = WORK / "AppDir"
+    shutil.copytree(app_dir, appdir / "usr" / "lib" / "poschat", symlinks=True)
+    run = appdir / "AppRun"
+    run.write_text('#!/bin/sh\nHERE="$(dirname "$(readlink -f "$0")")"\nexec "$HERE/usr/lib/poschat/PostechChat" "$@"\n',
+                   encoding="utf-8")
+    run.chmod(0o755)
+    (appdir / "poschat.desktop").write_text(
+        "[Desktop Entry]\nType=Application\nName=POSCHAT\nComment=POSTECH GenAI 채팅\nExec=PostechChat\nIcon=poschat\n"
+        f"Terminal=false\nCategories=Office;Education;Chat;\nStartupWMClass=POSCHAT\nX-AppImage-Version={APP_VERSION}\n",
+        encoding="utf-8")
+    shutil.copy2(ICON_PNG, appdir / "poschat.png")
+    (appdir / ".DirIcon").symlink_to("poschat.png")
+    # AppImage를 풀었을 때도 보이도록 라이선스 전문과 제3자 고지를 맨 위에 둔다(앱 안에도 들어 있다)
+    shutil.copy2(ROOT / "LICENSE", appdir / "LICENSE.txt")
+    shutil.copy2(ROOT / "THIRD_PARTY_NOTICES.md", appdir / "THIRD_PARTY_NOTICES.md")
+    out = ROOT / "release"
+    out.mkdir(exist_ok=True)
+    target = out / APPIMAGE_FILE
+    target.unlink(missing_ok=True)
+    # CI 러너처럼 FUSE가 없는 곳에서도 appimagetool(AppImage)이 돌도록 풀어서 실행하게 한다
+    env = dict(os.environ, ARCH="x86_64", APPIMAGE_EXTRACT_AND_RUN="1")
+    subprocess.run([tool, "--no-appstream", str(appdir), str(target)], check=True, env=env)
+    target.chmod(0o755)
+    print(f"완료: {target} ({target.stat().st_size / 1024 / 1024:.1f} MB)")
+
+
 def main():
     if sys.platform == "darwin":
         if WORK.exists():
             shutil.rmtree(WORK)
         return build_mac()
+    if sys.platform.startswith("linux"):
+        if WORK.exists():
+            shutil.rmtree(WORK)
+        return build_linux()
     if (Path(sys.base_prefix) / "conda-meta").is_dir():
         # conda의 OpenSSL은 실행 파일에 OPENSSL_Applink가 있어야 해서, PyInstaller exe에서는
         # HTTPS 요청 때 "OPENSSL_Uplink: no OPENSSL_Applink"로 프로세스가 꺼진다.
