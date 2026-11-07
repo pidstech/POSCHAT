@@ -28,6 +28,7 @@ POSCHAT은 PIDS Tech. 팀이 만들고 관리하는 비공식 프로젝트입니
 | 사용자가 고른 AI 모델 서비스: POSTECH GenAI API(기본), Anthropic Claude API, 사용자가 넣은 호환 API 주소 | 질문, 대화 맥락, 첨부한 파일·코드의 내용, 에이전트가 읽은 파일의 일부 | 질문을 보내거나 에이전트에게 일을 맡길 때 |
 | 로컬 AI(Ollama, 이 기기 안) | 위와 같음 | 'AI 실행 정책'에서 로컬 모델을 쓸 때. 기기 밖으로 나가지 않습니다 |
 | 업데이트 서버(PIDS Tech.가 운영) | 일반적인 HTTP 정보(IP 주소·시각·`POSCHAT` 이름표). 앱 버전·사용자 정보는 보내지 않습니다 | 새 버전 확인(설정에서 끌 수 있음)과 설치 파일 받기. Microsoft Store판은 확인만 하고 내려받지 않습니다 |
+| GitHub(`raw.githubusercontent.com`), 받지 못하면 업데이트 서버 | 일반적인 HTTP 정보(IP 주소·시각·`POSCHAT` 이름표) | 하루에 한 번 모델 목록(공개 저장소의 `models.json`) 받기(설정 → 업데이트에서 끌 수 있음). 받기만 하고 아무것도 보내지 않습니다 |
 | Hugging Face(`huggingface.co`) | 일반적인 HTTP 정보 | PO노트의 음성 인식 모델을 처음 받을 때. 음성은 이 기기 안에서만 처리합니다 |
 | arXiv·Semantic Scholar·Crossref·OpenAlex | 사용자가 찾는 논문 검색어·식별자 | 논문 열기·찾기를 쓸 때 |
 | 사용자가 연 웹사이트 | 일반적인 웹 브라우징 정보 | 앱 안의 브라우저로 사이트를 열 때 |
@@ -70,6 +71,6 @@ POSCHAT은 만 14세 미만 아동을 대상으로 하지 않으며, 아동의 �
 POSCHAT is an unofficial project by the PIDS Tech. team; it is not an official product of POSTECH. **The only server the developer runs is the update server (new-version check and installer download); the app sends it no chats, files, or account data, and the developer does not collect any.**
 Your prompts and attachments are sent directly to the AI model service you choose (POSTECH GenAI API by default, Anthropic Claude API, a compatible endpoint you enter, or a local Ollama model that stays on your device).
 Chats, settings, and logs stay on your device; API keys and tokens are kept in the operating system's secure storage.
-The app contacts the update server to check for new versions (can be turned off; the Microsoft Store edition only checks; the server sees only your IP address and a generic HTTP request), Hugging Face to download the on-device speech model once, and paper services (arXiv, Semantic Scholar, Crossref, OpenAlex) when you search papers.
+The app contacts the update server to check for new versions (can be turned off; the Microsoft Store edition only checks; the server sees only your IP address and a generic HTTP request), GitHub (or the update server) once a day to download the public model list `models.json` (can be turned off; nothing is sent), Hugging Face to download the on-device speech model once, and paper services (arXiv, Semantic Scholar, Crossref, OpenAlex) when you search papers.
 Connectors (GitHub, Google, Notion, Firecrawl, Zotero), Google Drive sync (encrypted), Langfuse export (off by default), external MCP servers, and content reports (public GitHub issues you submit yourself in the browser) work only when you enable or use them.
 The microphone is used only while recording in PO Note, and speech recognition runs on the device. Contact: beomjoon@pidstech.com.

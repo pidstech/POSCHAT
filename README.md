@@ -226,7 +226,7 @@ Releases의 `POSCHAT-linux-x86_64.AppImage`를 받습니다. x86_64(64비트 Int
 | Claude Sonnet 5.5 | POSTECH GenAI 2026년 10월 안내 모델 | 콘솔에서 확인 |
 | Gemini 3.8 Flash | POSTECH GenAI 2026년 10월 안내 모델 | 콘솔에서 확인 |
 
-표의 10개 모델은 모두 OpenAI 호환 API에서 응답하는 것을 확인했습니다(2026년 10월). Claude 모델 ID는 점이 아니라 `-`를 씁니다(`claude-opus-5-5`, `claude-sonnet-5-5`). POSTECH 서버는 모델 목록(`GET .../models`)을 알려 주지 않으므로 기본 목록을 씁니다. 다른 OpenAI 호환 서버는 **모델 목록 불러오기**로 그 서버의 모델을 받아 저장할 때 반영합니다. GPT-5 계열은 Responses API에서도 계속 사용할 수 있습니다.
+표의 10개 모델은 모두 OpenAI 호환 API에서 응답하는 것을 확인했습니다(2026년 10월). Claude 모델 ID는 점이 아니라 `-`를 씁니다(`claude-opus-5-5`, `claude-sonnet-5-5`). POSTECH 서버는 모델 목록(`GET .../models`)을 알려 주지 않으므로 기본 목록을 씁니다. 2.3부터 기본 목록은 저장소의 `models.json`에서 하루에 한 번 받아 맞추므로, 게이트웨이 모델이 바뀌어도 앱을 새로 받지 않아도 됩니다([모델 목록 자동 동기화](docs/model-catalog.md)). 다른 OpenAI 호환 서버는 **모델 목록 불러오기**로 그 서버의 모델을 받아 저장할 때 반영합니다. GPT-5 계열은 Responses API에서도 계속 사용할 수 있습니다.
 
 **일반 AI 모델 (Claude)** (1.11): [Anthropic 콘솔](https://console.anthropic.com)에서 발급한 본인 Claude API 키(`sk-ant-...`, 또는 환경 변수 `ANTHROPIC_API_KEY`)로 대화·에이전트·PO노트 노트 만들기·대화 요약·모델 평가를 모두 Claude API로 보냅니다. 요금은 그 키의 Anthropic 계정으로 청구되고 POSTECH 크레딧은 쓰지 않습니다. 키와 기본 모델은 POSTECH 쪽과 따로 저장되므로 방식만 바꿔 오갈 수 있고, 동기화되지 않습니다. Claude API는 음성을 받지 않으므로 PO노트의 서버 음성 보정과 크레딧 확인은 POSTECH 키가 있을 때만 씁니다(없으면 로컬 AI로만 받아 적습니다). Opus 5.5·Sonnet 5.5·Fable 5.1은 안전 정책으로 답하지 않으면 Anthropic이 권하는 다른 모델로 다시 답하게 합니다(server-side fallback).
 

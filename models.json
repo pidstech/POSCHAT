@@ -1,0 +1,86 @@
+{
+  "schema": 1,
+  "updated": "2026-11-07",
+  "chat_completions": [
+    {
+      "id": "gpt-5.1-gs-2025-11-13",
+      "label": "GPT-5.1 — 권장: 성능과 비용의 균형"
+    },
+    {
+      "id": "gpt-5.2-gs-2025-12-11",
+      "label": "GPT-5.2 — 가장 좋은 성능, 비용 높음"
+    },
+    {
+      "id": "gpt-5-gs-2025-08-07",
+      "label": "GPT-5"
+    },
+    {
+      "id": "gpt-5-mini-gs-2025-08-07",
+      "label": "GPT-5 mini — 빠르고 저렴"
+    },
+    {
+      "id": "gpt-4.1-mini-gs-2025-04-14",
+      "label": "GPT-4.1 mini — 추론 없음, 저렴"
+    },
+    {
+      "id": "gpt-6.1-sol",
+      "label": "GPT-6.1 Sol"
+    },
+    {
+      "id": "gpt-6-astra",
+      "label": "GPT-6 Astra"
+    },
+    {
+      "id": "claude-opus-5-5",
+      "label": "Claude Opus 5.5"
+    },
+    {
+      "id": "claude-sonnet-5-5",
+      "label": "Claude Sonnet 5.5"
+    },
+    {
+      "id": "gemini-3.8-flash",
+      "label": "Gemini 3.8 Flash"
+    }
+  ],
+  "anthropic": [
+    {
+      "id": "claude-opus-5-5",
+      "label": "Claude Opus 5.5 — 권장"
+    },
+    {
+      "id": "claude-sonnet-5-5",
+      "label": "Claude Sonnet 5.5 — 빠르고 저렴"
+    },
+    {
+      "id": "claude-haiku-5-5",
+      "label": "Claude Haiku 5.5 — 가장 빠르고 저렴"
+    },
+    {
+      "id": "claude-fable-5-1",
+      "label": "Claude Fable 5.1 — 가장 높은 성능, 비용 높음"
+    }
+  ],
+  "openai": [
+    {
+      "id": "gpt-5.1",
+      "label": "GPT-5.1 — 권장: 성능과 비용의 균형"
+    },
+    {
+      "id": "gpt-5.2",
+      "label": "GPT-5.2 — 가장 좋은 성능, 비용 높음"
+    },
+    {
+      "id": "gpt-5-mini",
+      "label": "GPT-5 mini — 빠르고 저렴"
+    },
+    {
+      "id": "gpt-4.1-mini",
+      "label": "GPT-4.1 mini — 추론 없음, 저렴"
+    }
+  ],
+  "aliases": {
+    "claude-opus-5.5": "claude-opus-5-5",
+    "claude-sonnet-5.5": "claude-sonnet-5-5"
+  }
+}
