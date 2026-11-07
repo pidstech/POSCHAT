@@ -185,9 +185,32 @@ RESPONSES_PATH = "/responses"
 CHAT_COMPLETIONS_PATH = "/chat/completions"
 
 
+# 2.3: 저장소의 models.json에서 받아 온 모델 카탈로그(model_catalog.validate의 결과). 없으면 위의 기본 목록을 쓴다.
+_catalog = None
+
+
+def set_catalog(catalog):
+    """받아 둔 모델 카탈로그를 쓴다(None이면 앱에 들어 있는 기본 목록으로 돌아간다)."""
+    global _catalog
+    _catalog = catalog if isinstance(catalog, dict) and isinstance(catalog.get("modes"), dict) else None
+
+
+def builtin_models(mode):
+    """mode의 기본 목록 [(모델 ID, 이름)]. 받아 둔 카탈로그가 그 mode를 다루면 그 목록을 쓴다."""
+    if mode == "responses":
+        return RESPONSES_MODELS
+    key = mode if mode in (ANTHROPIC_MODE, OPENAI_MODE) else "chat_completions"
+    rows = (_catalog or {}).get("modes", {}).get(key)
+    if rows:
+        return [(m, label) for m, label in rows]
+    return {ANTHROPIC_MODE: ANTHROPIC_MODELS, OPENAI_MODE: OPENAI_MODELS}.get(key, MODELS)
+
+
 def normalize_model(model_id):
+    """옛 모델 ID를 지금 ID로. 카탈로그의 aliases(제공 모델 이름이 바뀐 경우)도 따른다."""
     model_id = str(model_id or "")
-    return MODEL_ALIASES.get(model_id, model_id)
+    model_id = MODEL_ALIASES.get(model_id, model_id)
+    return ((_catalog or {}).get("aliases") or {}).get(model_id, model_id)
 
 
 def _auth_headers(api_key, **extra):
@@ -258,6 +281,10 @@ def list_models(api_key, chat_completions_url, timeout=20):
 
 
 def model_label(model_id):
+    for rows in ((_catalog or {}).get("modes") or {}).values():
+        for m, label in rows:
+            if m == model_id:
+                return label
     return MODEL_LABELS.get(model_id) or ANTHROPIC_LABELS.get(model_id) or OPENAI_LABELS.get(model_id, model_id)
 
 

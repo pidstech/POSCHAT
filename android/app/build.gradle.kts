@@ -24,6 +24,8 @@ val syncSharedPython by tasks.registering(Sync::class) {
             "agent.py", "ai_memory.py", "api.py", "attachments.py", "certs.py", "documents.py", "main.py",
             "mcp_client.py", "office_mcp.py", "paper_mcp.py", "notion_mcp.py", "firecrawl_mcp.py",
             "po_note.py", "sherpa_capi.py", "storage.py", "stt.py", "updates.py", "version.py",
+            // 2.3: 모델 목록 자동 동기화
+            "model_catalog.py",
             // 1.10: 커넥터·연결·도구 창
             "connectors.py", "oauth.py", "privacy.py", "secret_store.py", "workspace_api.py",
             "github_mcp.py", "google_mcp.py",

@@ -53,6 +53,7 @@ def make_bridge(data_dir):
     events = []
     bridge = main.Bridge()
     bridge._window = _Window(events)
+    bridge._config.setdefault("model_sync", False)   # 2.3: 화면 점검 중에는 모델 카탈로그를 받으러 나가지 않는다
     return bridge, events
 
 

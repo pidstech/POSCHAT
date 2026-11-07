@@ -17,6 +17,9 @@ GitHub 릴리스(CI가 서명 파일 .sig까지 올림)
 - 최신 버전은 `/releases/download/latest/<파일>` 링크로도 받을 수 있습니다. 서버에는 최근 2개 버전만 둡니다.
 - 서버의 스크립트(저장소 밖): `/opt/poschat-update/poschat-sync.py`, `publish.py`, systemd 유닛 `poschat-update-sync.{service,timer}`.
 
+## 모델 카탈로그(2.3)
+앱은 하루에 한 번 `https://raw.githubusercontent.com/pidstech/POSCHAT/main/models.json`을 받고, 받지 못하면 이 서버의 `/api/models.json`을 봅니다([model-catalog.md](model-catalog.md)). GitHub가 막힌 망을 위해 동기화 스크립트가 같은 파일을 `/var/www/updates/api/models.json`으로 복사하도록 넣어 두세요(저장소 밖 작업, 크기 64KB 이하, `Content-Type: application/json`). 없으면(404) 앱은 GitHub에서 받은 것이나 앱에 들어 있는 목록을 그대로 씁니다.
+
 ## 저장소를 다시 비공개로 바꿀 때(지금은 공개)
 GitHub가 비공개이면 서버가 릴리스를 가져오려면 읽기 전용 토큰이 필요합니다.
 1. GitHub → Settings → Developer settings → Fine-grained tokens: 저장소 `pidstech/POSCHAT`만, 권한은 **Contents: Read-only**(Metadata는 자동).

@@ -1,0 +1,62 @@
+# SPDX-FileCopyrightText: 2026 Beomjoon Kim
+# SPDX-License-Identifier: AGPL-3.0-only
+name: Model list check
+
+# 2.3: 제공 모델 변경 감시. 매주 월요일(한국 시각 10:17)과 수동 실행 때 제공자 API에 실제 모델 목록을 물어
+# 카탈로그(api.py = models.json)와 비교한다. 카탈로그 모델이 사라졌으면(종료·이름 변경 의심) 'model-catalog' 이슈를
+# 열거나 같은 이슈에 보고서를 덧붙인다. 키는 저장소 Secrets(ANTHROPIC_API_KEY, OPENAI_API_KEY, POSTECH_GENAI_API_KEY)에서
+# 읽고, 없는 제공자는 건너뛴다. 목록을 고치는 것은 사람이 한다(api.py 수정 → tools/model_catalog.py write → main 병합).
+on:
+  schedule:
+    - cron: "17 1 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install requests anthropic
+
+      - name: models.json matches api.py
+        run: python tools/model_catalog.py check
+
+      - name: Ask providers
+        id: probe
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          POSTECH_GENAI_API_KEY: ${{ secrets.POSTECH_GENAI_API_KEY }}
+        run: |
+          set +e
+          python tools/model_catalog.py probe --out "$RUNNER_TEMP/models-report.md"
+          code=$?
+          set -e
+          cat "$RUNNER_TEMP/models-report.md" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$code" = "2" ]; then echo "attention=true" >> "$GITHUB_OUTPUT"; elif [ "$code" != "0" ]; then exit "$code"; fi
+
+      - name: Open or update the model-catalog issue
+        if: steps.probe.outputs.attention == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create model-catalog --color FBCA04 --description "제공 모델 변경(자동 점검)" 2>/dev/null || true
+          number=$(gh issue list --label model-catalog --state open --json number --jq '.[0].number')
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body-file "$RUNNER_TEMP/models-report.md"
+          else
+            gh issue create --title "제공 모델 목록이 바뀌었습니다" --label model-catalog --body-file "$RUNNER_TEMP/models-report.md"
+          fi

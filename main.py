@@ -23,6 +23,7 @@ import attachments
 import connectors
 import documents
 import mcp_client
+import model_catalog
 import plugins
 import po_note
 import storage
@@ -39,12 +40,13 @@ from paper_api import PaperApi
 from ssh_api import SshApi
 from workspace_api import WorkspaceApi
 from agent import INIT_TASK, Agent, discover_skills, load_init, resource_dir
-from api import DEFAULT_MODEL, MODELS, RESPONSES_MODELS, ApiError, ApiSettings
+from api import DEFAULT_MODEL, RESPONSES_MODELS, ApiError, ApiSettings
 import version
 from version import APP_VERSION
 
 APP_TITLE = "POSCHAT"
 UPDATE_INTERVAL = 6 * 3600  # 시작할 때 새 버전을 확인하는 최소 간격(초)
+MODEL_SYNC_INTERVAL = 24 * 3600  # 2.3: 시작할 때 모델 목록(카탈로그·받아 둔 서버 목록)을 맞추는 최소 간격(초)
 WINDOW_MODES = ("normal", "maximized", "fullscreen")  # 1.19 설정: 앱을 열 때의 창 크기
 # 2.0: 처음에는 최대화로 연다. 1.19.1의 기본값(전체 화면)은 창의 제목 표시줄(최소화·최대화·닫기 버튼)까지 숨겨
 # 창을 줄이거나 닫을 방법이 F11뿐이었다. 최대화는 화면을 채우면서 그 버튼을 그대로 둔다.
@@ -219,6 +221,7 @@ class Bridge(WorkspaceApi, BrowserApi, PaperApi, CodeApi, CodeAgentApi, SshApi, 
         telemetry.prune()
         storage.cleanup_staged()
         connectors.prune_audit()
+        api.set_catalog(model_catalog.load(self._config.get("model_catalog")))  # 2.3: 지난번에 받아 둔 모델 카탈로그
         self._migrate_config()
         self._sync_schedule(10)  # 동기화를 켰으면 시작하고 조금 뒤 한 번
         self._export_schedule(60)
@@ -370,6 +373,7 @@ class Bridge(WorkspaceApi, BrowserApi, PaperApi, CodeApi, CodeAgentApi, SshApi, 
                 "openai_model": self._config.get("openai_model", api.DEFAULT_OPENAI_MODEL),
                 "stream": self._config.get("stream", True),
                 "update_check": self._config.get("update_check", True),
+                "model_sync": self._config.get("model_sync", True),
                 "developer_mode": bool(self._config.get("developer_mode")),
                 "window_mode": self._window_mode(),
                 "adaptive": self._adaptive_public(),
@@ -383,6 +387,7 @@ class Bridge(WorkspaceApi, BrowserApi, PaperApi, CodeApi, CodeAgentApi, SshApi, 
             "models": [{"id": m, "label": label} for m, label in self._models("chat_completions")],
             "responses_models": [{"id": m, "label": label} for m, label in RESPONSES_MODELS],
             "models_source": "server" if self._config.get("server_models") else "builtin",
+            "model_catalog_updated": (model_catalog.load(self._config.get("model_catalog")) or {}).get("updated", ""),
             "anthropic_models": [{"id": m, "label": label} for m, label in self._models(api.ANTHROPIC_MODE)],
             "anthropic_models_source": "server" if self._config.get("anthropic_server_models") else "builtin",
             "openai_models": [{"id": m, "label": label} for m, label in self._models(api.OPENAI_MODE)],
@@ -425,12 +430,12 @@ class Bridge(WorkspaceApi, BrowserApi, PaperApi, CodeApi, CodeAgentApi, SshApi, 
             return RESPONSES_MODELS
         if mode == api.ANTHROPIC_MODE:
             server = [m for m in self._config.get("anthropic_server_models") or [] if isinstance(m, str) and m]
-            return [(m, api.model_label(m)) for m in server] if server else api.ANTHROPIC_MODELS
+            return [(m, api.model_label(m)) for m in server] if server else api.builtin_models(mode)
         if mode == api.OPENAI_MODE:
             server = [m for m in self._config.get("openai_server_models") or [] if isinstance(m, str) and m]
-            return [(m, api.model_label(m)) for m in server] if server else api.OPENAI_MODELS
+            return [(m, api.model_label(m)) for m in server] if server else api.builtin_models(mode)
         server = [m for m in self._config.get("server_models") or [] if isinstance(m, str) and m]
-        return [(m, api.model_label(m)) for m in server] if server else MODELS
+        return [(m, api.model_label(m)) for m in server] if server else api.builtin_models(mode)
 
     def _model_ids(self, mode):
         return {model_id for model_id, _ in self._models(mode)}
@@ -438,7 +443,7 @@ class Bridge(WorkspaceApi, BrowserApi, PaperApi, CodeApi, CodeAgentApi, SshApi, 
     def _default_model(self):
         mode = self._mode()
         allowed = self._models(mode)
-        configured = self._config.get(api.model_config_key(mode)) or api.default_model(mode)
+        configured = api.normalize_model(self._config.get(api.model_config_key(mode)) or api.default_model(mode))
         return configured if configured in {model_id for model_id, _ in allowed} else allowed[0][0]
 
     def rename_thread(self, thread_id, title):
@@ -536,6 +541,8 @@ class Bridge(WorkspaceApi, BrowserApi, PaperApi, CodeApi, CodeAgentApi, SshApi, 
                 self._config["stream"] = bool(settings["stream"])
             if "update_check" in settings:
                 self._config["update_check"] = bool(settings["update_check"])
+            if "model_sync" in settings:
+                self._config["model_sync"] = bool(settings["model_sync"])
             if "developer_mode" in settings:  # 1.17: 라우팅·토큰·손익분기의 원자료를 화면에 보인다
                 self._config["developer_mode"] = bool(settings["developer_mode"])
             mode = settings.get("window_mode")
@@ -599,6 +606,50 @@ class Bridge(WorkspaceApi, BrowserApi, PaperApi, CodeApi, CodeAgentApi, SshApi, 
             return {"ok": False, "error": f"모델 목록을 불러오지 못했습니다: {e}"}
         return {"ok": True, "chat_completions_url": url,
                 "models": [{"id": m, "label": api.model_label(m)} for m in ids]}
+
+    # 2.3: 모델 목록 자동 동기화. 제공 모델이 바뀌어도(새 모델·이름 변경·종료) 앱을 새로 내지 않고 따라간다.
+    _SERVER_MODEL_KEYS = (("chat_completions", "server_models"), (api.ANTHROPIC_MODE, "anthropic_server_models"),
+                          (api.OPENAI_MODE, "openai_server_models"))
+
+    def sync_models(self, manual=False):
+        """저장소의 모델 카탈로그(models.json)를 받고, '모델 목록 불러오기'로 받아 둔 서버 목록을 다시 받는다.
+
+        시작할 때(manual=False)는 설정(model_sync)을 따르고 하루에 한 번만 한다. 네트워크 오류는 조용히 넘기고
+        지금 목록을 그대로 쓴다. 목록이 바뀌었으면 changed=True — 화면은 get_state로 다시 그린다.
+        """
+        if not manual and (not self._config.get("model_sync", True)
+                           or time.time() - self._config.get("model_synced_at", 0) < MODEL_SYNC_INTERVAL):
+            return {"ok": True, "changed": False, "skipped": True}
+        changed, errors = False, []
+        try:
+            catalog = model_catalog.fetch()
+        except model_catalog.CatalogError as e:
+            catalog = None
+            errors.append(str(e))
+        # 사용자가 한 번 '모델 목록 불러오기'를 한 방식만 다시 받는다(키로 쓸 수 있는 모델이 바뀌었을 수 있다)
+        fresh = {}
+        for mode, key in self._SERVER_MODEL_KEYS:
+            if not self._config.get(key):
+                continue
+            result = self.refresh_models({"api_mode": mode})
+            if result.get("ok"):
+                fresh[key] = self._clean_models([m["id"] for m in result["models"]])
+            else:
+                errors.append(result.get("error", ""))
+        with self._lock:
+            if catalog is not None and catalog != model_catalog.load(self._config.get("model_catalog")):
+                self._config["model_catalog"] = catalog
+                api.set_catalog(catalog)
+                changed = True
+            for key, ids in fresh.items():
+                if ids and self._config.get(key) and ids != self._config.get(key):
+                    self._config[key] = ids
+                    changed = True
+            if catalog is not None or fresh:
+                self._config["model_synced_at"] = time.time()
+            storage.save_config(self._config)
+        return {"ok": not errors or catalog is not None or bool(fresh), "changed": changed, "errors": errors,
+                "updated": (catalog or {}).get("updated", "")}
 
     @staticmethod
     def _valid_https_url(value):
