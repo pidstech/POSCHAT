@@ -1384,6 +1384,9 @@ function showSettings() {
   stream.checked = c.stream !== false;
   const autoUpdate = h("input", { type: "checkbox", style: "width:auto;margin:0 8px 0 0" });
   autoUpdate.checked = c.update_check !== false;
+  // 2.3: 모델 목록 자동 동기화(저장소의 모델 카탈로그 + '모델 목록 불러오기'로 받아 둔 목록을 하루에 한 번 다시 받는다)
+  const modelSync = h("input", { type: "checkbox", style: "width:auto;margin:0 8px 0 0" });
+  modelSync.checked = c.model_sync !== false;
   const devMode = h("input", { type: "checkbox", style: "width:auto;margin:0 8px 0 0" });
   devMode.checked = !!c.developer_mode;
   // 1.19: 앱을 열 때의 창 크기. 다음 실행부터 적용된다(지금 창은 F11로 전체 화면을 켜고 끌 수 있다).
@@ -1468,7 +1471,23 @@ function showSettings() {
           } finally {
             e.target.disabled = false;
           }
-        } }, "업데이트 확인"))),
+        } }, "업데이트 확인")),
+      h("label", { style: "display:flex;align-items:center;font-weight:400;cursor:pointer;margin-top:8px" }, modelSync,
+        "모델 목록 자동 업데이트(하루 한 번)"),
+      h("div", { class: "row", style: "margin-top:6px" },
+        h("small", { style: "flex:1;margin:0" }, "제공 모델이 바뀌면(새 모델·이름 변경·종료) 앱을 새로 받지 않아도 모델 목록을 맞춥니다. ",
+          S.modelCatalogUpdated ? `받은 모델 목록: ${S.modelCatalogUpdated}` : "지금은 앱에 들어 있는 모델 목록을 씁니다."),
+        h("button", { class: "btn", type: "button", onclick: async (e) => {
+          e.target.disabled = true;
+          try {
+            const result = await api().sync_models(true);
+            if (result.changed) applyState(await api().get_state());
+            toast(result.changed ? "모델 목록을 새로 받았습니다. 설정 창을 다시 열면 반영됩니다"
+              : result.ok ? "모델 목록이 최신입니다" : `모델 목록을 받지 못했습니다: ${(result.errors || [])[0] || ""}`);
+          } finally {
+            e.target.disabled = false;
+          }
+        } }, "모델 목록 확인"))),
     h("div", { class: "row guide-link" },
       h("span", { style: "flex:1" }, "GitHub·Google·Zotero 연결, MCP 서버, 메모리·동기화, 사용량·진단은 '연결·도구' 창에서 관리합니다. 연구 라이브러리와 에이전트 자동화는 왼쪽 사이드바에서 엽니다."),
       h("button", { class: "btn", type: "button", onclick: () => showHub() }, "연결·도구 열기")),
@@ -1529,7 +1548,7 @@ function showSettings() {
             clear_anthropic_key: clearAnthropic.checked && !anthropicKey.value.trim(),
             openai_api_key: openaiKey.value.trim(), openai_server_models: openaiModels,
             clear_openai_key: clearOpenai.checked && !openaiKey.value.trim(),
-            update_check: autoUpdate.checked, developer_mode: devMode.checked, window_mode: windowMode.value,
+            update_check: autoUpdate.checked, model_sync: modelSync.checked, developer_mode: devMode.checked, window_mode: windowMode.value,
             notion_token: notion.value.trim(), clear_notion: clearNotion.checked && !notion.value.trim(),
             firecrawl_key: firecrawl.value.trim(), clear_firecrawl: clearFirecrawl.checked && !firecrawl.value.trim(),
           });
@@ -2069,6 +2088,7 @@ function applyState(state) {
   S.models = state.models || [];
   S.responsesModels = state.responses_models || [];
   S.modelsSource = state.models_source || "builtin";
+  S.modelCatalogUpdated = state.model_catalog_updated || "";
   S.anthropicModels = state.anthropic_models || [];
   S.anthropicModelsSource = state.anthropic_models_source || "builtin";
   S.openaiModels = state.openai_models || [];
@@ -2216,6 +2236,8 @@ async function init() {
   if (!state.config.has_key) showSettings();
   // 새 버전 확인(설정에서 끌 수 있고 6시간에 한 번). 실패해도 사용에 지장이 없으므로 알리지 않는다.
   api().check_for_updates(false).then((r) => { if (r.available) offerUpdate(r); }).catch(() => {});
+  // 2.3: 모델 목록 동기화(하루 한 번, 설정에서 끌 수 있다). 바뀌었으면 모델 선택 목록을 다시 그린다. 실패는 알리지 않는다.
+  api().sync_models?.(false).then(async (r) => { if (r.changed) applyState(await api().get_state()); }).catch(() => {});
 }
 
 if (window.pywebview && window.pywebview.api) init();
