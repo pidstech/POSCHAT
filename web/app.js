@@ -1564,7 +1564,7 @@ function showSettings() {
 }
 
 /* ---------- 업데이트 ---------- */
-const UPD = { modal: null, bar: null, text: null };
+const UPD = { modal: null, bar: null, text: null, downloading: false };
 
 function offerUpdate(update, attempts = 0) {
   // 다른 창(설정 등)이 열려 있으면 닫힐 때까지 기다렸다가 연다
@@ -1599,10 +1599,21 @@ function offerUpdate(update, attempts = 0) {
 async function startUpdate(update) {
   UPD.bar = h("i", { style: "width:0%" });
   UPD.text = h("p", { style: "margin:0 0 10px;color:var(--text-2)" }, `${update.version} 설치 파일을 내려받는 중…`);
+  // 2.3.1: 받는 중에 창을 닫거나 '취소'를 누르면 내려받기를 멈춘다(받은 부분은 남아 다음에 이어 받는다)
+  UPD.downloading = true;
   UPD.modal = modal({ title: "업데이트", body: h("div", {}, UPD.text, h("div", { class: "po-meter po-progress" }, UPD.bar)),
-    onClose: () => { UPD.modal = null; } });
+    buttons: [{ label: "취소", value: "cancel" }],
+    onClose: () => {
+      UPD.modal = null;
+      if (UPD.downloading) {
+        UPD.downloading = false;
+        api().cancel_update();
+        toast("업데이트 내려받기를 멈췄습니다. 다시 업데이트하면 받은 부분부터 이어서 받습니다.");
+      }
+    } });
   const res = await api().download_update();
   if (res.ok === false) {
+    UPD.downloading = false;
     UPD.modal?.close();
     toast(res.error);
   }
@@ -1613,12 +1624,16 @@ function updateEvent(ev) {
     if (UPD.bar) UPD.bar.style.width = `${Math.round(ev.done / ev.total * 100)}%`;
     if (UPD.text) UPD.text.textContent = `설치 파일을 내려받는 중… ${fmtSize(ev.done)} / ${fmtSize(ev.total)}`;
   } else if (ev.kind === "installing" || ev.kind === "opened") {
+    UPD.downloading = false;
+    UPD.modal?.box.querySelector(".modal-foot")?.remove();
     if (UPD.text) UPD.text.textContent = ev.message;
     if (UPD.bar) UPD.bar.style.width = "100%";
     if (ev.kind === "opened") setTimeout(() => UPD.modal?.close(), 6000);
   } else if (ev.kind === "error") {
+    const shown = !UPD.downloading && ev.cancelled;   // 사용자가 멈춘 것: 이미 알렸다
+    UPD.downloading = false;
     UPD.modal?.close();
-    toast(`업데이트하지 못했습니다: ${ev.error}`);
+    if (!shown) toast(`업데이트하지 못했습니다: ${ev.error}`);
   }
 }
 

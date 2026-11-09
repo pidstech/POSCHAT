@@ -15,6 +15,7 @@ GitHub 릴리스(CI가 서명 파일 .sig까지 올림)
 - 피드는 GitHub `releases/latest`와 같은 모양의 JSON(`tag_name`·`name`·`body`·`assets[name,size,digest,browser_download_url]`)입니다.
 - 서버에는 서명 개인키가 없습니다. 동기화 스크립트는 파일마다 GitHub가 알려 주는 크기·SHA-256을 확인하고, 앱이 서명을 다시 확인합니다.
 - 최신 버전은 `/releases/download/latest/<파일>` 링크로도 받을 수 있습니다. 서버에는 최근 2개 버전만 둡니다.
+- 다운로드 페이지(`/poschat/`, 저장소 밖)는 이 링크를 씁니다. Windows(`POSCHAT-Setup.exe`)·macOS(`POSCHAT-mac.dmg`)에 더해 2.2부터 Linux(`POSCHAT-linux-x86_64.AppImage`) 버튼도 있어야 합니다.
 - 서버의 스크립트(저장소 밖): `/opt/poschat-update/poschat-sync.py`, `publish.py`, systemd 유닛 `poschat-update-sync.{service,timer}`.
 
 ## 모델 카탈로그(2.3)
@@ -35,4 +36,5 @@ GitHub가 비공개이면 서버가 릴리스를 가져오려면 읽기 전용 �
 - 피드: `curl https://pidstech.com/api/releases/latest`(도메인), `curl http://3.38.118.65/api/releases/latest`(IP, 1.18.2 앱용)
 - 마지막 동기화: `journalctl -u poschat-update-sync.service -n 20`, 다음 실행: `systemctl list-timers poschat-update-sync.timer`
 - 지금 바로 동기화: `sudo systemctl start poschat-update-sync.service`
+- 다운로드 페이지와 피드가 GitHub 최신 릴리스와 같은지: 태그·파일 이름·크기·digest 비교, `/poschat/`의 받기 링크(Windows·macOS·Linux)와 `/api/models.json`(200, JSON)
 - 디스크: `df -h /var/www` (릴리스 하나가 약 300MB, 동기화 중에는 두 배)

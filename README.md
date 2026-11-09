@@ -439,7 +439,7 @@ Linux AppImage는 `libportaudio2`와 [appimagetool](https://github.com/AppImage/
 
 안드로이드 APK는 `android/`에서 `./gradlew assembleRelease`(JDK 17, Android SDK, Python 3.11 필요)로 빌드합니다. 결과는 `android/app/build/outputs/apk/release/app-release.apk`입니다. 모든 빌드는 저장소의 공용 키(`android/app/poschat-shared.keystore`)로 서명해 덮어 설치가 되게 합니다. 공개 스토어에 올릴 때는 따로 보관한 키로 바꾸세요.
 
-설치 파일은 GitHub Releases에 올립니다. `.github/workflows/build.yml`이 Windows·macOS·Android 빌드와 플랫폼별 검증을 자동으로 수행합니다.
+설치 파일은 GitHub Releases에 올립니다. `.github/workflows/build.yml`이 Windows·macOS·Linux(AppImage) 빌드와 플랫폼별 검증을 자동으로 수행합니다(Android APK는 2026-10-26부터 CI에서 빌드·배포하지 않습니다).
 
 - PR을 올리거나 Actions에서 **Build installer**를 수동 실행하면, 빌드한 `POSCHAT-Setup.exe`를 실행 결과의 Artifacts에서 받을 수 있습니다.
 - 버전 태그를 push하면 같은 빌드가 그 태그의 Release에 첨부됩니다. 단위 테스트가 실패하면 Release를 만들지 않습니다.
@@ -450,9 +450,10 @@ Linux AppImage는 `libportaudio2`와 [appimagetool](https://github.com/AppImage/
   ```
 
   태그를 직접 push하지 않고 Actions에서 **Build installer → Run workflow**의 `release` 칸에 `v1.2.0`을 넣어 실행해도 됩니다. 이 경우 실행한 커밋에 태그와 Release가 만들어집니다.
-- 사용자에게는 항상 최신 버전을 가리키는 업데이트 서버 링크 `https://pidstech.com/releases/download/latest/POSCHAT-Setup.exe`(맥은 `POSCHAT-mac.dmg`, 안드로이드는 `POSCHAT.apk`)를 안내하면 됩니다. 저장소가 비공개여도 받을 수 있습니다. 서버가 GitHub 릴리스를 10분마다 가져옵니다([운영 안내](docs/update-server.md)).
+- 사용자에게는 항상 최신 버전을 가리키는 업데이트 서버 링크 `https://pidstech.com/releases/download/latest/POSCHAT-Setup.exe`(맥은 `POSCHAT-mac.dmg`, Linux는 `POSCHAT-linux-x86_64.AppImage`)를 안내하면 됩니다. 안드로이드 APK는 릴리스에 없으므로 `POSCHAT.apk` 링크는 404입니다. 저장소가 비공개여도 받을 수 있습니다. 서버가 GitHub 릴리스를 10분마다 가져옵니다([운영 안내](docs/update-server.md)).
 - **자동 업데이트**(1.9.1부터): 앱이 시작할 때(6시간에 한 번) 업데이트 서버(`updates.UPDATE_BASE_URL`)의 `/api/releases/latest`로 최신 정식 릴리스를 확인합니다. 1.18.1 이하 앱은 GitHub를 확인하므로, 저장소를 비공개로 바꾸기 전에 1.18.2를 공개 저장소에서 릴리스해 한 번 받게 합니다. 새 버전이 있으면 릴리스 노트와 함께 알리고, **업데이트**를 누르면 이 기기용 파일(`POSCHAT-Setup.exe`·`POSCHAT-mac.dmg`·`POSCHAT.apk`, 1.11부터의 이름. 릴리스에는 1.9.1~1.10.0 앱을 위해 예전 이름 `PostechChat-*`도 함께 올립니다)을 받아 서버가 알려 준 크기·SHA-256(digest)과, 릴리스 CI가 만든 Ed25519 서명(`<파일>.sig`)을 앱에 들어 있는 공개키로 확인합니다. 서버 주소가 http이므로 서명이 없거나 맞지 않으면 설치하지 않습니다([보안](docs/security.md#업데이트-신뢰-모델)).
-  - Windows: 설치 프로그램을 지금 설치 폴더로 열고 앱이 스스로 닫힙니다. 설치 프로그램에서 **설치**를 누르면 앱이 완전히 닫히기를 기다렸다가(1.11부터, 한 번만 누르면 됨) 대화·설정을 유지한 채 바뀝니다. 30초가 지나도 닫히지 않으면 강제로 종료할지 묻습니다.
+  - 내려받기(2.3.1): 끊기면 받은 데부터 이어 받고(GitHub와 업데이트 서버 사이에서도), GitHub가 너무 느리면 업데이트 서버로 옮겨 이어 받습니다. 업데이트 창의 **취소**로 멈출 수 있고, 다시 누르면 이어 받습니다. 지난 업데이트의 설치 파일은 앱이 시작할 때 지웁니다.
+  - Windows: 설치 프로그램을 지금 설치 폴더로 열고(`--update`) 앱이 스스로 닫힙니다. 설치 프로그램은 앱이 완전히 닫히기를 기다렸다가 대화·설정을 유지한 채 바로 설치하고, 끝나면 새 버전을 엽니다(2.3.1부터 **설치**·**마침**을 누르지 않아도 됨). 30초가 지나도 닫히지 않으면 강제로 종료할지 묻습니다.
   - macOS: 디스크 이미지를 엽니다. 앱을 끝낸 뒤 응용 프로그램 폴더로 끌어다 놓아 바꿉니다.
   - Linux(2.2): 실행 중인 AppImage 파일을 새 파일로 바꿉니다. 앱을 다시 열면 새 버전입니다.
   - Android: 설치 화면을 엽니다(처음 한 번 "이 출처 허용"이 필요합니다).

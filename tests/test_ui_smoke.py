@@ -84,6 +84,44 @@ class UiSmokeTests(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_update_dialog_can_cancel_the_download(self):
+        """2.3.1: 업데이트를 받는 중에 '취소'를 누르면 내려받기를 멈추고(cancel_update) 한 번만 알린다."""
+        from playwright.sync_api import sync_playwright
+
+        calls = []
+        saved = self.bridge.download_update, self.bridge.cancel_update
+        self.bridge.download_update = lambda: calls.append("download") or {"ok": True}
+        self.bridge.cancel_update = lambda: calls.append("cancel") or {"ok": True}
+        try:
+            with sync_playwright() as p:
+                browser, page, errors = self.open(p)
+                try:
+                    page.evaluate("startUpdate({ version: '9.9.9' })")
+                    page.wait_for_selector(".modal:has-text('업데이트') .modal-foot button:has-text('취소')")
+                    page.evaluate("updateEvent({ type: 'update', kind: 'progress', done: 5 * 1048576, total: 20 * 1048576 })")
+                    page.wait_for_selector(".modal:has-text('5.0 MB')")
+                    self.shot(page, "update-downloading")
+                    page.click(".modal-foot button:has-text('취소')")
+                    page.wait_for_selector("#toast:has-text('이어서 받습니다')")
+                    self.assertEqual(calls, ["download", "cancel"])
+                    # 뒤이어 오는 '취소했습니다' 오류 이벤트는 다시 알리지 않는다
+                    page.evaluate("updateEvent({ type: 'update', kind: 'error', error: '내려받기를 취소했습니다.', cancelled: true })")
+                    page.wait_for_timeout(200)
+                    self.assertEqual(page.locator("#toast:has-text('업데이트하지 못했습니다')").count(), 0)
+                    # 다 받은 뒤(설치 시작) 창을 닫아도 취소하지 않는다
+                    page.evaluate("startUpdate({ version: '9.9.9' })")
+                    page.wait_for_selector(".modal .modal-foot button:has-text('취소')")
+                    page.evaluate("updateEvent({ type: 'update', kind: 'installing', message: '설치 프로그램을 열었습니다.' })")
+                    self.assertEqual(page.locator(".modal .modal-foot").count(), 0)
+                    page.keyboard.press("Escape")
+                    page.wait_for_timeout(100)
+                    self.assertEqual(calls, ["download", "cancel", "download"])
+                    self.assertEqual([e for e in errors if "favicon" not in e], [])
+                finally:
+                    browser.close()
+        finally:
+            self.bridge.download_update, self.bridge.cancel_update = saved
+
     def test_markdown_blocks_external_images_and_unsafe_links(self):
         """프롬프트 인젝션이 모델 출력의 이미지·링크로 자료를 밖으로 보내지 못한다(외부 요청 0건). 수식·data 이미지는 그대로."""
         from playwright.sync_api import sync_playwright
