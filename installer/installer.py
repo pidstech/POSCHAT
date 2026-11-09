@@ -225,9 +225,21 @@ def install(dest, desktop, progress):
     return failed
 
 
+def had_desktop_shortcut():
+    """이전 설치가 바탕화면 바로가기를 만들었는지. 기록이 없으면(예전 설치) True(지금까지처럼 만든다)."""
+    previous = previous_shortcuts()
+    if not previous:
+        return True
+    desktop = shell_folder(CSIDL_DESKTOPDIRECTORY)
+    return any(Path(p).parent == desktop for p in previous)
+
+
 class InstallerUI:
-    def __init__(self, root, destination=None):
+    def __init__(self, root, destination=None, update=False):
         self.root = root
+        # 2.3.1: 앱의 '업데이트'로 열리면(--update) 사용자는 이미 업데이트를 골랐으므로 '설치'·'마침'을 다시 누르게 하지 않는다.
+        # 앱이 닫히기를 기다려 바로 설치하고, 끝나면 새 버전을 열고 이 창을 닫는다. 바탕화면 바로가기는 이전 설치를 따른다.
+        self.update = update
         root.title(f"{APP_NAME} 설치")
         root.resizable(False, False)
         try:
@@ -267,7 +279,7 @@ class InstallerUI:
         self.dest = tk.StringVar(value=str(destination or DEFAULT_DIR))
         ttk.Entry(row, textvariable=self.dest, width=46).pack(side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Button(row, text="찾아보기...", command=self.browse).pack(side=tk.LEFT, padx=(6, 0))
-        self.desktop = tk.BooleanVar(value=True)
+        self.desktop = tk.BooleanVar(value=had_desktop_shortcut() if update else True)
         self.launch = tk.BooleanVar(value=True)
         ttk.Checkbutton(self.body, text="바탕화면에 바로가기 만들기", variable=self.desktop).pack(anchor="w", pady=2)
         ttk.Checkbutton(self.body, text="설치 후 바로 실행", variable=self.launch).pack(anchor="w", pady=2)
@@ -287,6 +299,8 @@ class InstallerUI:
         root.update_idletasks()
         w, h = int(580 * dpi_scale), int(380 * dpi_scale)  # 고해상도(배율) 화면에서 창이 작아지지 않도록
         root.geometry(f"{w}x{h}+{(root.winfo_screenwidth() - w) // 2}+{(root.winfo_screenheight() - h) // 3}")
+        if update:
+            root.after(300, self.start)
 
     def browse(self):
         path = filedialog.askdirectory(initialdir=self.dest.get(), title="설치 위치 선택")
@@ -368,6 +382,8 @@ class InstallerUI:
         self.status.set(f"설치가 끝났습니다.\n{exe.parent}{note}")
         self.cancel_btn.pack_forget()
         self.install_btn.config(text="마침", state=tk.NORMAL, command=self.finish)
+        if self.update and not failed:
+            self.root.after(1500, self.finish)   # 업데이트: 새 버전을 바로 연다
 
     def finish(self):
         if self.launch.get():
@@ -410,7 +426,7 @@ def main():
         return
     destination = next((arg[6:] for arg in sys.argv if arg.startswith("--dir=")), None)
     root = tk.Tk()
-    InstallerUI(root, destination)
+    InstallerUI(root, destination, update="--update" in sys.argv)
     root.mainloop()
 
 

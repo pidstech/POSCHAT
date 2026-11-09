@@ -210,6 +210,7 @@ class Bridge(WorkspaceApi, BrowserApi, PaperApi, CodeApi, CodeAgentApi, SshApi, 
         self._po_generating = None    # 노트를 만드는 중인 노트 ID
         self._po_label = ""           # 녹음 중인 인식 방식 이름
         self._updating = False        # 업데이트 파일을 내려받는 중
+        self._update_cancel = threading.Event()   # 2.3.1: 업데이트 창을 닫으면 내려받기를 멈춘다(받은 부분은 이어 받는다)
         api.on_usage = storage.record_usage
         api.on_credit = self._on_credit
         # 관측(사용량·진단 탭): 내용 없이 메타데이터만 이 기기에 기록한다. Langfuse 내보내기는 켰을 때만.
@@ -866,6 +867,8 @@ class Bridge(WorkspaceApi, BrowserApi, PaperApi, CodeApi, CodeAgentApi, SshApi, 
 
     def check_for_updates(self, manual=False):
         """업데이트 서버의 최신 버전. 시작할 때(manual=False)는 설정을 따르고 6시간에 한 번만, 건너뛴 버전은 알리지 않는다."""
+        if not manual and not getattr(self, "_updating", False):
+            self._cleanup_updates()   # 2.3.1: 지난 업데이트의 설치 파일이 쌓이지 않게(시작할 때 한 번)
         if not manual and (not self._config.get("update_check", True)
                            or time.time() - self._config.get("update_checked_at", 0) < UPDATE_INTERVAL):
             return {"available": False, "skipped": True}
@@ -946,8 +949,19 @@ class Bridge(WorkspaceApi, BrowserApi, PaperApi, CodeApi, CodeAgentApi, SshApi, 
         if not self._can_self_update():
             return {"ok": False, "error": "이 실행 방식에서는 자동으로 설치할 수 없습니다. Releases 페이지에서 받으세요."}
         self._updating = True
+        self._update_cancel.clear()
         threading.Thread(target=self._update_work, daemon=True).start()
         return {"ok": True}
+
+    def cancel_update(self):
+        """2.3.1: 내려받는 중인 업데이트를 멈춘다. 받은 부분은 남겨 두어 다음에 이어서 받는다."""
+        self._update_cancel.set()
+        return {"ok": True}
+
+    @staticmethod
+    def _cleanup_updates():
+        """지난 업데이트가 남긴 설치 파일(수백 MB)을 지운다. 설치 프로그램이 아직 돌 수 있으니 10분 지난 것만."""
+        updates.cleanup(storage.APP_DIR / "updates")
 
     def _update_work(self):
         last = [0.0]
@@ -958,14 +972,15 @@ class Bridge(WorkspaceApi, BrowserApi, PaperApi, CodeApi, CodeAgentApi, SshApi, 
                 self._push({"type": "update", "kind": "progress", "done": done, "total": total})
 
         try:
-            path, version = updates.download(APP_VERSION, storage.APP_DIR / "updates", on_progress=progress)
+            path, version = updates.download(APP_VERSION, storage.APP_DIR / "updates", on_progress=progress,
+                                             cancelled=self._update_cancel.is_set)
             platform = updates.current_platform()
             if platform == "windows":
                 # 설치 프로그램은 앱이 완전히 닫힐 때까지 기다렸다가 설치한다. 같은 폴더에 설치하도록 열고 앱을 닫는다.
                 install_dir = Path(sys.executable).resolve().parent
                 subprocess.Popen([str(path), f"--dir={install_dir}", "--update"], cwd=str(path.parent))
                 self._push({"type": "update", "kind": "installing", "version": version,
-                            "message": "설치 프로그램을 열었습니다. 앱이 닫히면 설치 프로그램에서 '설치'를 누르세요."})
+                            "message": "설치 프로그램을 열었습니다. 앱이 닫히면 자동으로 설치하고 새 버전을 다시 엽니다."})
                 threading.Timer(2.0, self._close_for_update).start()
             elif platform == "linux":
                 # 2.2: 서명을 확인한 새 AppImage로 실행 중인 AppImage 파일을 바꾼다. 지금 창은 옛 버전 그대로 돌고, 다시 열면 새 버전이다
@@ -981,7 +996,7 @@ class Bridge(WorkspaceApi, BrowserApi, PaperApi, CodeApi, CodeAgentApi, SshApi, 
                            "디스크 이미지를 열었습니다. 앱을 끝낸 뒤 POSCHAT을 응용 프로그램 폴더로 끌어다 놓아 바꾸세요.")
                 self._push({"type": "update", "kind": "opened", "version": version, "message": message})
         except (updates.UpdateError, OSError) as e:
-            self._push({"type": "update", "kind": "error", "error": str(e)})
+            self._push({"type": "update", "kind": "error", "error": str(e), "cancelled": self._update_cancel.is_set()})
         finally:
             self._updating = False
 

@@ -227,23 +227,79 @@ def _fetch_signature(url):
     return text
 
 
+# 2.3.1 이어받기·느린 출처 바꾸기
+READ_TIMEOUT = 30          # 이만큼 아무것도 오지 않으면 끊긴 것으로 본다(초). 예전 120초는 멈춘 것처럼 보였다
+RESUME_ATTEMPTS = 3        # 한 출처에서 끊기면 받은 데까지 이어서 다시 요청하는 횟수(진행이 있으면 다시 센다)
+SLOW_AFTER = 20            # 받기 시작하고 이 시간(초)이 지난 뒤에
+SLOW_BYTES_PER_SEC = 150 * 1024   # 평균 속도가 이보다 느리면 다음 출처로 옮겨 이어 받는다(마지막 출처에서는 하지 않는다)
+STALE_SECONDS = 7 * 24 * 3600     # 이보다 오래된 받다 만 파일은 지운다
+KEEP_FINISHED_SECONDS = 600       # 다 받은 설치 파일은 설치 프로그램이 도는 동안 남겨 두고 그 뒤에 지운다
+
+
+class _Interrupted(UpdateError):
+    """받다가 끊겼다(받은 부분은 .part로 남겨 이어 받는다)."""
+
+
+class _Slow(_Interrupted):
+    """이 출처가 너무 느리다(받은 부분을 남기고 다음 출처에서 이어 받는다)."""
+
+
+def cleanup(directory, now=None):
+    """지난 업데이트가 남긴 파일을 지운다: 설치를 마친 설치 파일(10분 지난 것)과 일주일 지난 받다 만 파일.
+    지우지 못하면(설치 프로그램이 아직 실행 중 등) 그대로 둔다."""
+    import time
+
+    now = time.time() if now is None else now
+    try:
+        entries = list(Path(directory).iterdir())
+    except OSError:
+        return
+    for path in entries:
+        try:
+            if not path.is_file():
+                continue
+            age = now - path.stat().st_mtime
+            partial = path.name.endswith((".part", ".part.id"))
+            if age > (STALE_SECONDS if partial else KEEP_FINISHED_SECONDS):
+                path.unlink()
+        except OSError:
+            pass
+
+
 def download(installed_version, directory, platform=None, on_progress=None, cancelled=None, timeout=15):
     """새 버전의 이 기기용 설치 파일을 받아 서명·크기·SHA-256을 확인한 뒤 directory에 두고 경로를 돌려준다.
     출처(GitHub → 업데이트 서버)마다 피드·서명·파일 받기까지 한 번에 시도하고, 어느 단계든 실패하면 다음 출처로 넘어간다
-    (GitHub 파일 서버만 막힌 학교·회사 망). 둘 다 실패하면 첫 오류를 알린다. 사용자가 취소하면 바로 멈춘다."""
-    error = None
-    for feed_url, page_url, download_prefix in SOURCES:
+    (GitHub 파일 서버만 막힌 학교·회사 망). 둘 다 실패하면 첫 오류를 알린다. 사용자가 취소하면 바로 멈춘다.
+
+    2.3.1: 끊기면 받은 데까지 이어서 받는다(Range). 두 출처는 같은 파일(같은 태그·SHA-256)을 주므로 출처를 바꿔도 이어 받고,
+    마지막에 SHA-256과 서명을 확인한다. 앞 출처가 너무 느리면 다음 출처로 옮겨 이어 받고, 다음 출처가 안 되면 느린 곳에서 마저 받는다.
+    """
+    error, slow = None, []
+    for index, source in enumerate(SOURCES):
         try:
-            release = _fetch_release(feed_url, page_url, download_prefix, timeout)
-            return _download_release(release, installed_version, directory, platform, on_progress, cancelled)
+            release = _fetch_release(*source, timeout)
+            return _download_release(release, installed_version, directory, platform, on_progress, cancelled,
+                                     watch_speed=index < len(SOURCES) - 1)
+        except _Slow as e:
+            slow.append(source)
+            error = error or e
         except UpdateError as e:
             if cancelled and cancelled():
                 raise
             error = error or e
+    for source in slow:   # 다른 출처가 모두 안 되면 느려도 받던 곳에서 마저 받는다
+        try:
+            release = _fetch_release(*source, timeout)
+            return _download_release(release, installed_version, directory, platform, on_progress, cancelled,
+                                     watch_speed=False)
+        except UpdateError as e:
+            if cancelled and cancelled():
+                raise
+            error = e
     raise error
 
 
-def _download_release(release, installed_version, directory, platform, on_progress, cancelled):
+def _download_release(release, installed_version, directory, platform, on_progress, cancelled, watch_speed=False):
     if version_tuple(release["version"]) <= version_tuple(installed_version):
         raise UpdateError("이미 최신 버전입니다.")
     name = asset_name(release, platform)
@@ -260,34 +316,98 @@ def _download_release(release, installed_version, directory, platform, on_progre
     signature = _fetch_signature(_asset_url(release, release["assets"][name + ".sig"], name + ".sig"))
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
-    path, part = directory / name, directory / (name + ".part")
-    sha, done = hashlib.sha256(), 0
+    path, part, ident = directory / name, directory / (name + ".part"), directory / (name + ".part.id")
+    keep = False
     try:
-        with _get(url, headers={"User-Agent": USER_AGENT}, timeout=(15, 120), stream=True) as r:
-            if r.status_code != 200:
-                raise UpdateError(f"업데이트 파일을 내려받지 못했습니다 (HTTP {r.status_code}).")
-            with open(part, "wb") as out:
-                for chunk in r.iter_content(chunk_size=1024 * 1024):
-                    if cancelled and cancelled():
-                        raise UpdateError("내려받기를 취소했습니다.")
-                    done += len(chunk)
-                    if done > size:
-                        raise UpdateError("업데이트 파일이 예상보다 큽니다.")
-                    sha.update(chunk)
-                    out.write(chunk)
-                    if on_progress:
-                        on_progress(done, size)
-        if done != size:
-            raise UpdateError("업데이트 파일을 끝까지 받지 못했습니다. 다시 시도하세요.")
+        sha, done = _resume_point(part, ident, f"v{release['version']}\n{size}\n{expected}\n")
+        sha = _receive(url, part, size, sha, done, on_progress, cancelled, watch_speed)
         if sha.hexdigest() != expected:
             raise UpdateError("내려받은 업데이트 파일이 손상되었습니다(SHA-256 불일치). 다시 시도하세요.")
         verify_signature(signed_message(f"v{release['version']}", name, size, expected), signature)
         os.replace(part, path)  # 서명까지 맞은 파일만 최종 이름이 된다
-    except requests.RequestException as e:
-        raise UpdateError(f"업데이트 파일을 내려받지 못했습니다: {e}") from e
+    except _Interrupted:
+        keep = True   # 다음 시도(다른 출처, 다시 누르기)에서 이어 받는다
+        raise
+    except UpdateError as e:
+        keep = "취소" in str(e)
+        raise
     finally:
-        part.unlink(missing_ok=True)
+        if not keep:
+            part.unlink(missing_ok=True)
+            ident.unlink(missing_ok=True)
     return path, release["version"]
+
+
+def _resume_point(part, ident, key):
+    """같은 파일(태그·크기·SHA-256)을 받다 만 .part가 있으면 그 내용의 해시와 길이부터 이어 간다. 아니면 새로 시작한다."""
+    sha = hashlib.sha256()
+    try:
+        same = ident.read_text(encoding="utf-8") == key
+    except OSError:
+        same = False
+    if not same or not part.is_file():
+        part.unlink(missing_ok=True)
+        ident.write_text(key, encoding="utf-8")
+        return sha, 0
+    done = 0
+    with open(part, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            sha.update(chunk)
+            done += len(chunk)
+    return sha, done
+
+
+def _receive(url, part, size, sha, done, on_progress, cancelled, watch_speed):
+    """part에 size바이트가 찰 때까지 받는다(sha는 이미 받은 done바이트까지 반영돼 있다). 끊기면 Range로 이어서 다시 요청한다."""
+    import time
+
+    if done > size:
+        raise UpdateError("업데이트 파일이 예상보다 큽니다.")
+    started, start_done = time.monotonic(), done
+    failures, last_error = 0, None
+    while done < size:
+        if failures >= RESUME_ATTEMPTS:
+            raise _Interrupted(f"업데이트 파일을 받다가 연결이 끊겼습니다({last_error}). 다시 누르면 받은 부분부터 이어서 받습니다.")
+        headers = {"User-Agent": USER_AGENT}
+        if done:
+            headers["Range"] = f"bytes={done}-"
+        before = done
+        try:
+            with _get(url, headers=headers, timeout=(15, READ_TIMEOUT), stream=True) as r:
+                if done and r.status_code == 206:
+                    if not str(r.headers.get("Content-Range") or "").startswith(f"bytes {done}-"):
+                        raise UpdateError("업데이트 서버가 이어 받기 요청에 다른 부분을 보냈습니다. 다시 시도하세요.")
+                    mode = "ab"
+                elif r.status_code == 200:
+                    if done:   # 이어 받기를 지원하지 않는 서버: 처음부터 받는다
+                        sha = hashlib.sha256()
+                        done = before = 0
+                    mode = "wb"
+                elif 500 <= r.status_code < 600:
+                    raise requests.ConnectionError(f"HTTP {r.status_code}")
+                else:
+                    raise UpdateError(f"업데이트 파일을 내려받지 못했습니다 (HTTP {r.status_code}).")
+                with open(part, mode) as out:
+                    for chunk in r.iter_content(chunk_size=1024 * 1024):
+                        if cancelled and cancelled():
+                            raise UpdateError("내려받기를 취소했습니다. 다시 누르면 받은 부분부터 이어서 받습니다.")
+                        done += len(chunk)
+                        if done > size:
+                            raise UpdateError("업데이트 파일이 예상보다 큽니다.")
+                        sha.update(chunk)
+                        out.write(chunk)
+                        if on_progress:
+                            on_progress(done, size)
+                        elapsed = time.monotonic() - started
+                        if (watch_speed and elapsed > SLOW_AFTER and done < size
+                                and (done - start_done) / elapsed < SLOW_BYTES_PER_SEC):
+                            raise _Slow("업데이트 파일을 받는 속도가 너무 느립니다. 다시 누르면 받은 부분부터 이어서 받습니다.")
+        except requests.RequestException as e:
+            last_error = e
+        else:
+            last_error = "파일이 끝나기 전에 연결이 닫혔습니다"
+        failures = 0 if done > before else failures + 1
+    return sha
 
 
 def store_url():

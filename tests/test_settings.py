@@ -137,7 +137,8 @@ class SettingsTests(unittest.TestCase):
 
     @patch.object(app_main.storage, "save_config")
     @patch.object(app_main.updates, "check")
-    def test_startup_update_check_respects_setting_interval_and_skip(self, check, _save_config):
+    @patch.object(app_main.updates, "cleanup")
+    def test_startup_update_check_respects_setting_interval_and_skip(self, cleanup, check, _save_config):
         check.return_value = {"available": True, "version": "1.10.0", "asset": "PostechChat-Setup.exe",
                               "name": "", "notes": "", "url": ""}
         bridge = self.bridge({"update_check": False})
@@ -150,6 +151,12 @@ class SettingsTests(unittest.TestCase):
         self.assertFalse(bridge.check_for_updates(False)["available"])  # 건너뛴 버전은 알리지 않는다
         check.side_effect = app_main.updates.UpdateError("업데이트 정보를 찾지 못했습니다")
         self.assertIn("찾지 못했습니다", bridge.check_for_updates(True)["error"])
+        # 2.3.1: 시작할 때(manual=False)만 지난 업데이트 설치 파일을 정리한다. '업데이트 확인' 버튼은 정리하지 않는다
+        self.assertEqual(cleanup.call_count, 3)
+        cleanup.reset_mock()
+        bridge._updating = True   # 받는 중에는 받던 파일을 건드리지 않는다
+        bridge.check_for_updates(False)
+        cleanup.assert_not_called()
 
     def test_refresh_models_needs_key_and_https_url(self):
         with patch.dict(app_main.os.environ, {}, clear=True):

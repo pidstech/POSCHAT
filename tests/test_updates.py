@@ -53,6 +53,33 @@ def response(status=200, json_data=None, chunks=None, text=""):
     return r
 
 
+def ranged(start, data=None, status=206, total=None):
+    """Range 요청(bytes=start-)에 대한 응답."""
+    data = DATA[start:] if data is None else data
+    r = response(status=status)
+    r.iter_content.return_value = [data] if data else []
+    r.headers = {"Content-Range": f"bytes {start}-{start + max(len(data), 1) - 1}/{total or len(DATA)}"}
+    return r
+
+
+def broken(data, error=None, start=0):
+    """data를 보낸 뒤 연결이 끊기는 응답(start가 있으면 그 위치부터의 206 응답)."""
+    def chunks(**_):
+        yield data
+        raise error or requests.exceptions.ChunkedEncodingError("connection reset")
+    r = response(status=206 if start else 200)
+    r.headers = {"Content-Range": f"bytes {start}-{len(DATA) - 1}/{len(DATA)}"}
+    r.iter_content.side_effect = chunks
+    return r
+
+
+def server_release():
+    feed = release()
+    for a in feed["assets"]:
+        a["browser_download_url"] = a["browser_download_url"].replace(updates.DOWNLOAD_PREFIX, updates.SERVER_DOWNLOAD_PREFIX)
+    return feed
+
+
 def serve(feed, signature=None, body=None):
     """latest_release → 서명 → 파일 순서로 받는 요청에 답한다."""
     return [response(json_data=feed), response(text=sign() if signature is None else signature),
@@ -123,9 +150,15 @@ class UpdateTests(unittest.TestCase):
         self.assert_refused(get, "SHA-256")
 
     @patch("updates.requests.get")
-    def test_download_refuses_short_file(self, get):
-        get.side_effect = serve(release(size=len(DATA) + 10))
-        self.assert_refused(get, "끝까지")
+    def test_short_file_keeps_the_part_and_reports_resume(self, get):
+        """2.3.1: 끝까지 오지 않으면 받은 부분을 남기고(다시 누르면 이어 받는다) 설치 파일은 만들지 않는다."""
+        get.side_effect = [response(json_data=release(size=len(DATA) + 10)), response(text=sign()), response()] + \
+            [ranged(len(DATA), b"") for _ in range(updates.RESUME_ATTEMPTS)] + [response(503)]
+        with tempfile.TemporaryDirectory() as temp:
+            with self.assertRaisesRegex(updates.UpdateError, "이어서"):
+                updates.download("1.9.1", temp, "windows")
+            self.assertFalse((Path(temp) / "POSCHAT-Setup.exe").exists())
+            self.assertEqual((Path(temp) / "POSCHAT-Setup.exe.part").read_bytes(), DATA)
 
     @patch("updates.requests.get")
     def test_download_refuses_missing_digest(self, get):
@@ -282,6 +315,126 @@ class GitHubSourceTests(unittest.TestCase):
         get.side_effect = [response(json_data=release()), response(text=sign()), redirect, response(503)]
         with tempfile.TemporaryDirectory() as temp, self.assertRaisesRegex(updates.UpdateError, "허용한 곳이 아닙니다"):
             updates.download("1.10.0", temp, "windows")
+
+
+@patch.object(updates, "UPDATE_PUBLIC_KEYS", (PUBLIC,))
+class ResumeTests(unittest.TestCase):
+    """2.3.1: 끊기면 이어 받고, 느리거나 막힌 출처에서 받은 부분은 다른 출처에서 이어 받는다."""
+
+    @patch("updates.requests.get")
+    def test_resumes_after_a_dropped_connection(self, get):
+        get.side_effect = [response(json_data=release()), response(text=sign()), broken(DATA[:7]), ranged(7)]
+        with tempfile.TemporaryDirectory() as temp:
+            path, _ = updates.download("1.10.0", temp, "windows")
+            self.assertEqual(Path(path).read_bytes(), DATA)
+            self.assertFalse((Path(temp) / "POSCHAT-Setup.exe.part.id").exists())
+        self.assertEqual(get.call_args_list[-1].kwargs["headers"]["Range"], "bytes=7-")
+        self.assertNotIn("Range", get.call_args_list[2].kwargs["headers"])
+
+    @patch("updates.requests.get")
+    def test_read_timeout_is_short(self, get):
+        get.side_effect = serve(release())
+        with tempfile.TemporaryDirectory() as temp:
+            updates.download("1.10.0", temp, "windows")
+        self.assertEqual(get.call_args_list[2].kwargs["timeout"][1], updates.READ_TIMEOUT)
+        self.assertLessEqual(updates.READ_TIMEOUT, 30)
+
+    @patch("updates.requests.get")
+    def test_switches_to_update_server_and_continues_from_the_part(self, get):
+        github_down = [broken(DATA[:5], requests.ConnectionError("reset"))] + \
+            [broken(b"", requests.ConnectionError("reset"), start=5) for _ in range(updates.RESUME_ATTEMPTS)]
+        get.side_effect = [response(json_data=release()), response(text=sign())] + github_down + \
+            [response(json_data=server_release()), response(text=sign()), ranged(5)]
+        with tempfile.TemporaryDirectory() as temp:
+            path, _ = updates.download("1.10.0", temp, "windows")
+            self.assertEqual(Path(path).read_bytes(), DATA)
+        last = get.call_args_list[-1]
+        self.assertTrue(last.args[0].startswith(updates.SERVER_DOWNLOAD_PREFIX))
+        self.assertEqual(last.kwargs["headers"]["Range"], "bytes=5-")
+
+    @patch("updates.requests.get")
+    def test_server_without_range_support_restarts_cleanly(self, get):
+        get.side_effect = [response(json_data=release()), response(text=sign()), broken(DATA[:4]), response()]
+        with tempfile.TemporaryDirectory() as temp:
+            path, _ = updates.download("1.10.0", temp, "windows")
+            self.assertEqual(Path(path).read_bytes(), DATA)
+
+    @patch("updates.requests.get")
+    def test_wrong_content_range_is_refused_and_part_dropped(self, get):
+        bad = ranged(3)
+        get.side_effect = [response(json_data=release()), response(text=sign()), broken(DATA[:7]), bad, response(503)]
+        with tempfile.TemporaryDirectory() as temp:
+            with self.assertRaisesRegex(updates.UpdateError, "다른 부분"):
+                updates.download("1.10.0", temp, "windows")
+            self.assertFalse((Path(temp) / "POSCHAT-Setup.exe.part").exists())
+
+    @patch("updates.requests.get")
+    def test_part_of_another_version_is_not_reused(self, get):
+        with tempfile.TemporaryDirectory() as temp:
+            (Path(temp) / "POSCHAT-Setup.exe.part").write_bytes(b"garbage-from-old")
+            (Path(temp) / "POSCHAT-Setup.exe.part.id").write_text("v1.0.0\n1\nx\n", encoding="utf-8")
+            get.side_effect = serve(release())
+            path, _ = updates.download("1.10.0", temp, "windows")
+            self.assertEqual(Path(path).read_bytes(), DATA)
+        self.assertNotIn("Range", get.call_args_list[2].kwargs["headers"])
+
+    @patch("updates.requests.get")
+    def test_pressing_update_again_resumes_from_the_kept_part(self, get):
+        with tempfile.TemporaryDirectory() as temp:
+            get.side_effect = [response(json_data=release()), response(text=sign()), broken(DATA[:6])] + \
+                [broken(b"", start=6) for _ in range(updates.RESUME_ATTEMPTS)] + [response(503)]
+            with self.assertRaisesRegex(updates.UpdateError, "이어서"):
+                updates.download("1.10.0", temp, "windows")
+            get.side_effect = [response(json_data=release()), response(text=sign()), ranged(6)]
+            get.reset_mock()
+            path, _ = updates.download("1.10.0", temp, "windows")
+            self.assertEqual(Path(path).read_bytes(), DATA)
+        self.assertEqual(get.call_args_list[-1].kwargs["headers"]["Range"], "bytes=6-")
+
+    @patch("updates.requests.get")
+    def test_cancel_keeps_the_part_for_later(self, get):
+        get.side_effect = serve(release())
+        with tempfile.TemporaryDirectory() as temp:
+            with self.assertRaisesRegex(updates.UpdateError, "취소"):
+                updates.download("1.10.0", temp, "windows", cancelled=lambda: True)
+            self.assertTrue((Path(temp) / "POSCHAT-Setup.exe.part.id").exists())
+
+    @patch("updates.requests.get")
+    @patch.object(updates, "SLOW_AFTER", -1)
+    @patch.object(updates, "SLOW_BYTES_PER_SEC", 10 ** 12)
+    def test_slow_source_hands_over_to_the_next_one(self, get):
+        get.side_effect = [response(json_data=release()), response(text=sign()), response(chunks=[DATA[:5], DATA[5:]]),
+                           response(json_data=server_release()), response(text=sign()), ranged(5)]
+        with tempfile.TemporaryDirectory() as temp:
+            path, _ = updates.download("1.10.0", temp, "windows")
+            self.assertEqual(Path(path).read_bytes(), DATA)
+        self.assertEqual(get.call_args_list[-1].kwargs["headers"]["Range"], "bytes=5-")
+
+    @patch("updates.requests.get")
+    @patch.object(updates, "SLOW_AFTER", -1)
+    @patch.object(updates, "SLOW_BYTES_PER_SEC", 10 ** 12)
+    def test_slow_source_is_finished_when_the_other_one_fails(self, get):
+        get.side_effect = [response(json_data=release()), response(text=sign()), response(chunks=[DATA[:5], DATA[5:]]),
+                           response(500), response(json_data=release()), response(text=sign()), ranged(5)]
+        with tempfile.TemporaryDirectory() as temp:
+            path, _ = updates.download("1.10.0", temp, "windows")
+            self.assertEqual(Path(path).read_bytes(), DATA)
+
+
+class CleanupTests(unittest.TestCase):
+    def test_removes_finished_installers_and_stale_parts_only(self):
+        import os
+        import time
+        with tempfile.TemporaryDirectory() as temp:
+            d = Path(temp)
+            now = time.time()
+            files = {"old.exe": now - 3600, "fresh.exe": now - 10, "a.part": now - 3600, "b.part": now - 8 * 86400}
+            for name, mtime in files.items():
+                (d / name).write_bytes(b"x")
+                os.utime(d / name, (mtime, mtime))
+            updates.cleanup(d, now)
+            self.assertEqual(sorted(p.name for p in d.iterdir()), ["a.part", "fresh.exe"])
+            updates.cleanup(d / "missing", now)   # 폴더가 없어도 조용히 지나간다
 
 
 if __name__ == "__main__":
