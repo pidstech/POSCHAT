@@ -21,7 +21,10 @@ REPOSITORY = "pidstech/POSCHAT"  # 소스 코드 주소(설정의 라이선스 �
 # 보조 업데이트 서버(HTTPS). GitHub에서 받지 못할 때만 쓴다. 1.18.7 이하 앱은 이 서버만 보므로 서버는 계속 서비스한다.
 UPDATE_BASE_URL = "https://pidstech.com"
 # 서명 공개키(Ed25519 raw 32바이트의 base64). 여러 개를 두면 하나라도 맞을 때 받아들인다(키 교체: docs/security.md).
-UPDATE_PUBLIC_KEYS = ("Et1RfxsTZ4VAy/odq+idHpUVPwcvfoHkkp8fPwY4g/A=",)
+UPDATE_PUBLIC_KEYS = (
+    "Et1RfxsTZ4VAy/odq+idHpUVPwcvfoHkkp8fPwY4g/A=",  # 1: 저장소 시크릿 UPDATE_SIGNING_KEY (교체 중, docs/security.md)
+    "T8/GMKAdOsEHwQ6pZCpEOf6rz8eSk8bUkNQFaz5GNGQ=",  # 2: release 환경 시크릿 UPDATE_SIGNING_KEY_V2
+)
 # Microsoft Store 제품 ID(파트너 센터의 'Store ID', 9N…로 시작). 비어 있으면 Store의 '다운로드 및 업데이트' 화면을 연다.
 STORE_PRODUCT_ID = ""
 RELEASE_URL = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"

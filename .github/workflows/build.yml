@@ -384,6 +384,8 @@ jobs:
       !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') &&
       (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release != ''))
     runs-on: ubuntu-latest
+    # 서명 키를 쓰는 작업이라 'release' 환경(관리자 승인, v* 태그·main만)에서만 돈다. docs/security.md
+    environment: release
     permissions:
       contents: write
     steps:
